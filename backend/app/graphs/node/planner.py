@@ -27,7 +27,7 @@ def planner(state: ResumeState) -> Dict[str, Any]:
     latest_answer = state.get("latest_answer")
     current_workflow = state.get("workflow_type")
     
-    # If there's no latest answer, default to BUILD_PROFILE
+                                                           
     if not latest_answer:
         return {"workflow_type": current_workflow or "BUILD_PROFILE"}
 
@@ -51,12 +51,12 @@ def planner(state: ResumeState) -> Dict[str, Any]:
         logger.info(f"Planner decided workflow: {result.workflow_type}, has_jd: {result.has_jd}")
         
         updates: Dict[str, Any] = {"workflow_type": result.workflow_type}
-        
+
         if result.workflow_type == "TAILOR_RESUME":
             if result.has_jd and result.job_description:
                 updates["job_description"] = result.job_description
             else:
-                # We flag that JD is missing so the graph can route to asking for it
+                                                                                    
                 updates["job_description"] = None
                 
         return updates

@@ -53,7 +53,7 @@ def enhance_resume(state: ResumeState) -> Dict[str, Any]:
     try:
         enhanced: EnhancedResume = structured_llm.invoke(prompt)
         
-        # Merge back safely
+                           
         if "summary" not in r:
             r["summary"] = {}
         r["summary"]["content"] = enhanced.summary_content
@@ -66,7 +66,7 @@ def enhance_resume(state: ResumeState) -> Dict[str, Any]:
             if i < len(enhanced.projects):
                 proj["highlights"] = enhanced.projects[i].highlights
                 
-        # Re-validate the merged dict just to be safe
+                                                     
         validated_resume = Resume.model_validate(r)
         
         return {
@@ -75,4 +75,4 @@ def enhance_resume(state: ResumeState) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"Failed to enhance resume: {e}")
-        return {"phase": "enhancing"} # fallback to original
+        return {"phase": "enhancing"}                       

@@ -6,6 +6,7 @@ from app.graphs.state import ResumeState
 from app.graphs.node.planner import planner
 from app.graphs.node.tailor_resume import tailor_resume
 from app.graphs.node.parse_document import parse_document
+from app.graphs.node.confirm_import import confirm_import
 from app.graphs.node.analyze_gaps import analyze_gaps
 from app.graphs.node.prioritize_queue import prioritize_queue
 from app.graphs.node.generate_question import generate_question
@@ -24,7 +25,7 @@ def route_start(state: ResumeState) -> str:
     """
     Router to determine if we need planning or if we are in the middle of a collection turn.
     """
-    # For Phase 1, we always route user text inputs through the planner to determine intent
+                                                                                           
     if state.get("uploaded_text") or state.get("uploaded_file"):
         return "parse_document"
         
@@ -38,17 +39,25 @@ def route_planner(state: ResumeState) -> str:
     Router after planner node decides the workflow_type.
     """
     workflow_type = state.get("workflow_type")
-    
+    current_question = state.get("current_question") or {}
+
+                                                                                    
+                                                                            
+    if current_question.get("section") == "import":
+        return "confirm_import"
+    if current_question.get("field") == "system":
+        return "tailor_resume"
+
     if workflow_type == "TAILOR_RESUME":
         return "tailor_resume"
-        
-    # Default to BUILD_PROFILE flow
-    # If there is an active question they were answering, extract it
-    if state.get("current_question") and state.get("latest_answer"):
-        if state.get("current_question").get("is_verification"):
+
+                                   
+                                                                    
+    if current_question and state.get("latest_answer"):
+        if current_question.get("is_verification"):
             return "process_verification"
         return "extract_entities"
-        
+
     return "analyze_gaps"
 
 def route_verification(state: ResumeState) -> str:
@@ -77,14 +86,15 @@ def route_after_gaps(state: ResumeState) -> str:
     
     return "enhance_resume"
 
-# Initialize Graph
+                  
 workflow = StateGraph(ResumeState)
 
-# Add Nodes
+           
 workflow.add_node("planner", planner)
 workflow.add_node("tailor_resume", tailor_resume)
 workflow.add_node("score_ats", score_ats)
 workflow.add_node("parse_document", parse_document)
+workflow.add_node("confirm_import", confirm_import)
 workflow.add_node("analyze_gaps", analyze_gaps)
 workflow.add_node("prioritize_queue", prioritize_queue)
 workflow.add_node("generate_question", generate_question)
@@ -96,7 +106,7 @@ workflow.add_node("merge_profile", merge_profile)
 workflow.add_node("enhance_resume", enhance_resume)
 workflow.add_node("render_resume", render_resume)
 
-# Add Edges
+           
 workflow.add_conditional_edges(START, route_start, {
     "planner": "planner",
     "parse_document": "parse_document",
@@ -105,6 +115,7 @@ workflow.add_conditional_edges(START, route_start, {
 
 workflow.add_conditional_edges("planner", route_planner, {
     "tailor_resume": "tailor_resume",
+    "confirm_import": "confirm_import",
     "extract_entities": "extract_entities",
     "process_verification": "process_verification",
     "analyze_gaps": "analyze_gaps"
@@ -120,7 +131,21 @@ workflow.add_conditional_edges("tailor_resume", route_tailor_resume, {
     END: END
 })
 workflow.add_edge("score_ats", "render_resume")
-workflow.add_edge("parse_document", "analyze_gaps")
+
+                                                                                
+workflow.add_edge("parse_document", "confirm_import")
+
+
+def route_confirm_import(state: ResumeState) -> str:
+    if state.get("import_confirmed"):
+        return "analyze_gaps"
+    return END                                     
+
+
+workflow.add_conditional_edges("confirm_import", route_confirm_import, {
+    "analyze_gaps": "analyze_gaps",
+    END: END,
+})
 
 workflow.add_edge("extract_entities", "verify_entities")
 workflow.add_edge("process_verification", "verify_entities")
@@ -143,11 +168,11 @@ workflow.add_conditional_edges("analyze_gaps", route_after_gaps, {
 
 workflow.add_edge("prioritize_queue", "generate_question")
 
-# After selecting a question, we end the graph execution to wait for user input
+                                                                               
 workflow.add_edge("generate_question", END)
 
 workflow.add_edge("enhance_resume", "render_resume")
 workflow.add_edge("render_resume", END)
 
-# Export the uncompiled workflow
-# We will compile it dynamically in main.py with the checkpointer
+                                
+                                                                 

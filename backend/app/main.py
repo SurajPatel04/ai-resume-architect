@@ -16,18 +16,18 @@ from app.graphs.graph import workflow
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+             
     app.state.llm = get_openai_llm()
     
-    # Initialize Postgres checkpointer connection pool
-    # psycopg expects standard postgresql:// not postgresql+asyncpg://
+                                                      
+                                                                      
     db_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
     pool = AsyncConnectionPool(
         conninfo=db_url,
         max_size=20,
         kwargs={"autocommit": True, "prepare_threshold": 0},
     )
-    # Wait for pool initialization
+                                  
     await pool.wait()
     
     checkpointer = AsyncPostgresSaver(pool)
@@ -37,22 +37,22 @@ async def lifespan(app: FastAPI):
     app.state.checkpointer_pool = pool
     
     yield
-    # Shutdown
+              
     await dispose_engine()
     await pool.close()
 
 app = FastAPI(lifespan=lifespan)
 
-# Set up CORS for frontend communication
+                                        
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Set to specific origins in production
+    allow_origins=["*"],                                         
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Mount static directory for PDFs
+                                 
 pdf_dir = os.path.join(os.path.dirname(__file__), "static", "pdfs")
 os.makedirs(pdf_dir, exist_ok=True)
 app.mount("/pdfs", StaticFiles(directory=pdf_dir), name="pdfs")

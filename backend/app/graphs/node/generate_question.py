@@ -33,7 +33,17 @@ def generate_question(state: ResumeState) -> Dict[str, Any]:
     
     missing_str = ", ".join(missing_fields) if missing_fields else "the information"
 
-    if is_gate:
+    if target_gap.get("section") == "impact":
+        instructions = f"""
+    The user's resume contains this bullet point, but it states no measurable result:
+    "{target_gap.get('weak_bullet', '')}"
+
+    Ask ONE short question that gets them to quantify the outcome — a percentage, a
+    count, an amount of money, time saved, team size, whatever actually fits this bullet.
+    Set ui to 'chips' and offer 3-4 plausible magnitudes plus "Not sure", so they can
+    answer with a single tap instead of typing.
+        """
+    elif is_gate:
         instructions = f"""
     The user's resume is entirely missing the '{target_gap['section']}' section.
     You must ask a SINGLE question that achieves TWO things:
@@ -86,7 +96,10 @@ def generate_question(state: ResumeState) -> Dict[str, Any]:
             "ui": ui,
             "options": options,
             "is_gate": is_gate,
-            "missing_fields": missing_fields
+            "missing_fields": missing_fields,
+                                                                                 
+                                                
+            "bullet_index": target_gap.get("bullet_index"),
         },
         "validation_errors": []
     }

@@ -23,7 +23,7 @@ def process_verification(state: ResumeState) -> Dict[str, Any]:
     extracted = state.get("extracted_entities", {})
     entities = extracted.get("entities", [])
     
-    # Find the entity being verified
+                                    
     entity_idx = -1
     entity = None
     for i, e in enumerate(entities):
@@ -66,7 +66,7 @@ def process_verification(state: ResumeState) -> Dict[str, Any]:
         
     except Exception as e:
         logger.error(f"Failed to process verification: {e}")
-        # On failure, let's just assume they confirmed it so we don't trap them in a loop
+                                                                                         
         entity["confidence"] = 1.0
         entities[entity_idx] = entity
         extracted["entities"] = entities

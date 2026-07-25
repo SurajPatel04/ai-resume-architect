@@ -45,16 +45,24 @@ def tailor_resume(state: ResumeState) -> Dict[str, Any]:
     logger.info("Tailoring resume against job description...")
 
     job_description = state.get("job_description")
+    pending = state.get("current_question") or {}
+    latest_answer = state.get("latest_answer")
+
+                                                                                 
+                                                                                      
+    if not job_description and latest_answer and pending.get("field") == "system":
+        job_description = latest_answer
 
     if not job_description or not job_description.strip():
         logger.info("No job_description present. Asking user to provide one.")
+        ask = "Sure — paste the job description you'd like me to tailor your resume for."
         return {
             "current_question": {
                 "field": "system",
-                "question_text": "Sure — paste the job description you'd like me to tailor your resume for.",
+                "question_text": ask,
                 "ui": "text",
                 "options": []
-            }
+            },
         }
 
     master_profile = state.get("master_profile", {})
@@ -107,18 +115,14 @@ def tailor_resume(state: ResumeState) -> Dict[str, Any]:
                 proj["highlights"] = tailored.projects[i].highlights
 
         if tailored.skills_order and r.get("skills"):
-            existing = set()
+                                                                                
+                                                                               
+            rank = {s: i for i, s in enumerate(tailored.skills_order)}
             for cat in r["skills"]:
-                existing.update(cat.get("keywords", []))
-            
-            ordered = [s for s in tailored.skills_order if s in existing]
-            leftovers = [s for s in existing if s not in ordered]
-            final_keywords = ordered + leftovers
-            
-            if r["skills"]:
-                r["skills"][0]["keywords"] = final_keywords
-                for cat in r["skills"][1:]:
-                    cat["keywords"] = [k for k in cat.get("keywords", []) if k not in final_keywords]
+                cat["keywords"] = sorted(
+                    cat.get("keywords", []),
+                    key=lambda k: rank.get(k, len(rank)),
+                )
 
         tailored_resume = Resume.model_validate(r)
 
@@ -127,6 +131,9 @@ def tailor_resume(state: ResumeState) -> Dict[str, Any]:
 
         return {
             "generated_resumes": generated,
+            "job_description": job_description,
+            "latest_answer": None,
+            "current_question": None,
         }
 
     except Exception as e:
@@ -136,4 +143,9 @@ def tailor_resume(state: ResumeState) -> Dict[str, Any]:
             generated["tailored"] = master_profile.__class__.model_validate(master_profile.model_dump())
         else:
             generated["tailored"] = master_profile
-        return {"generated_resumes": generated}
+        return {
+            "generated_resumes": generated,
+            "job_description": job_description,
+            "latest_answer": None,
+            "current_question": None,
+        }

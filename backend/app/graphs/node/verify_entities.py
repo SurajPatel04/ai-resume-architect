@@ -14,7 +14,7 @@ def verify_entities(state: ResumeState) -> Dict[str, Any]:
     extracted = state.get("extracted_entities", {})
     
     if extracted.get("is_skip"):
-        # Just pass it through to validation
+                                            
         extracted["extracted_values"] = {}
         return {"extracted_entities": extracted}
         
@@ -23,23 +23,25 @@ def verify_entities(state: ResumeState) -> Dict[str, Any]:
     for entity in entities:
         if entity["confidence"] < 0.8:
             logger.info(f"Low confidence ({entity['confidence']}) for {entity['field']}. Creating verification question.")
-            # Create verification question
+                                          
             q_text = f"I extracted '{entity['value']}' for {entity['field']}. Is this correct? (Reply Yes, or provide the correct value)"
+            asked = state.get("current_question") or {}
             return {
                 "current_question": {
-                    "field": state["current_question"]["field"],
-                    "section": state["current_question"]["section"],
+                    "field": asked.get("field"),
+                    "section": asked.get("section", ""),
                     "question_text": q_text,
-                    "ui": "text",
-                    "options": [],
-                    "is_gate": state["current_question"].get("is_gate", False),
-                    "missing_fields": state["current_question"].get("missing_fields", []),
+                    "ui": "chips",
+                    "options": ["Yes, that's right"],
+                    "is_gate": asked.get("is_gate", False),
+                    "missing_fields": asked.get("missing_fields", []),
+                    "bullet_index": asked.get("bullet_index"),
                     "is_verification": True,
                     "verifying_field": entity["field"]
-                }
+                },
             }
             
-    # All entities verified or skipped
+                                      
     logger.info("All extracted entities met confidence threshold.")
     extracted_values = {e["field"]: e["value"] for e in entities}
     

@@ -3,6 +3,7 @@ import tempfile
 import os
 import subprocess
 from typing import Any, Dict
+from app.core.config import settings
 from app.graphs.state import ResumeState
 
 logger = logging.getLogger(__name__)
@@ -27,18 +28,18 @@ def render_resume(state: ResumeState) -> Dict[str, Any]:
     projects = r.get("projects", [])
     summary = r.get("summary", {}).get("content", "")
 
-    # Clean up fields for Typst
+                               
     def escape_typst(text: str) -> str:
         if not text:
             return ""
-        # Escape all Typst special characters that could break markup
-        # Note: +, =, and - are ONLY special if followed by space at the start of a line.
-        # Escaping them as \+, \=, \- breaks them (e.g., \- becomes a soft hyphen, \+ renders weirdly).
+                                                                     
+                                                                                         
+                                                                                                       
         for char in ['\\', '*', '_', '$', '<', '>', '@', '[', ']', '#']:
             text = text.replace(char, '\\' + char)
         return text
 
-    # Build Typst template
+                          
     typst_code = f"""
 #set document(title: "{escape_typst(basics.get('name', 'Resume'))}")
 #set page(margin: (x: 0.9in, y: 0.9in))
@@ -104,11 +105,11 @@ _{escape_typst(exp.get('position', ''))}_, {escape_typst(exp.get('location', '')
 - *{escape_typst(skill.get('name', ''))}*: {escape_typst(', '.join(skill.get('keywords', [])))}
 """
 
-    # Compile with Typst
+                        
     try:
         from uuid import uuid4
         
-        # Make static/pdfs directory
+                                    
         pdf_dir = os.path.join(os.path.dirname(__file__), "..", "..", "static", "pdfs")
         os.makedirs(pdf_dir, exist_ok=True)
         
@@ -121,13 +122,18 @@ _{escape_typst(exp.get('position', ''))}_, {escape_typst(exp.get('location', '')
 
         with open(typ_path, 'w', encoding='utf-8') as f:
             f.write(typst_code)
-            
+
         subprocess.run(["typst", "compile", typ_path, pdf_fs_path], check=True, capture_output=True)
-        
+        os.remove(typ_path)
+
         return {
             "phase": "completed",
-            "pdf_path": f"http://localhost:8000/pdfs/{filename}"
+            "pdf_path": f"{settings.PUBLIC_BASE_URL}/pdfs/{filename}"
         }
+    except subprocess.CalledProcessError as e:
+                                                                                
+        logger.error("Typst compile failed: %s", (e.stderr or b"").decode(errors="replace"))
+        return {"phase": "completed"}
     except Exception as e:
-        logger.error(f"Failed to compile Typst: {e}")
+        logger.error(f"Failed to render resume: {e}")
         return {"phase": "completed"}

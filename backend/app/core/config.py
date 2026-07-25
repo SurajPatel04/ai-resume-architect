@@ -15,22 +15,24 @@ class RefreshTokenSettings(BaseModel):
 
 
 class Settings(BaseSettings):
-    # App
+         
     APP_NAME: str = "AI Resume Architect"
     DEBUG: bool = False
+                                                                   
+    PUBLIC_BASE_URL: str = "http://localhost:8000"
 
-    # Database
+              
     DATABASE_URL: str
 
-    # JWT
+         
     ACCESS_TOKEN: AccessTokenSettings
     REFRESH_TOKEN: RefreshTokenSettings
 
-    # AI
+        
     OPENAI_API_KEY: str | None = None
     GEMINI_API_KEY: str | None = None
 
-    # Redis
+           
     REDIS_URL: str | None = None
 
     model_config = SettingsConfigDict(

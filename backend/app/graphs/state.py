@@ -1,9 +1,9 @@
 from typing import Any, Dict, List, Literal, Optional, TypedDict
 from pydantic import BaseModel, Field
 
-# -----------------------------------------------------------------------------
-# Resume Pydantic Models (Single Source of Truth)
-# -----------------------------------------------------------------------------
+                                                                               
+                                                 
+                                                                               
 
 class Basics(BaseModel):
     name: str = Field(default="", description="Full name of the candidate")
@@ -51,62 +51,68 @@ class Resume(BaseModel):
     skills: List[SkillCategory] = Field(default_factory=list, description="List of technical and soft skills grouped by category (e.g., Languages, Frameworks, Tools)")
     projects: List[Project] = Field(default_factory=list, description="Notable personal, academic, or open-source projects")
 
-# Factory function to create an empty resume structure
+                                                      
 def new_resume() -> Resume:
     return Resume()
 
 
-# -----------------------------------------------------------------------------
-# LangGraph State Schema
-# -----------------------------------------------------------------------------
+                                                                               
+                        
+                                                                               
 
 class ResumeState(TypedDict):
-    # Session
+             
     session_id: str
     user_id: Optional[str]
 
-    # Target Job
+                
     job_description: Optional[str]
 
-    # Conversation
-    messages: List[Dict[str, Any]]
+                                                                             
+                                                             
     latest_answer: Optional[str]
 
-    # Planner State
+                   
     workflow_type: Optional[Literal["BUILD_PROFILE", "TAILOR_RESUME"]]
     workflow: Optional[str]
     current_step: Optional[str]
     completion: int
 
-    # Current profile (The single source of truth)
+                                                  
     master_profile: Resume
 
-    # Generated tailored resumes
+                                
     generated_resumes: Dict[str, Resume]
     resume_versions: List[Dict[str, Any]]
 
-    # Uploaded document (only used during parsing)
+                                                  
     uploaded_file: Optional[str]
     uploaded_text: Optional[str]
 
-    # Planner
+             
     tasks: List[Dict[str, Any]]
     current_task: Optional[Dict[str, Any]]
 
-    # Gaps Architecture
+                                                                 
+    seniority: Optional[str]
+
+                                                                 
+    import_confirmed: Optional[bool]
+
+                       
     question_queue: List[Dict[str, Any]]
     skipped: List[str]
     active_target: Optional[Dict[str, Any]]
 
-    # Current question (sent to frontend)
+                                         
     current_question: Optional[Dict[str, Any]]
 
-    # Validation
+                
     extracted_entities: Dict[str, Any]
     validation_errors: List[str]
     pending_verifications: List[Dict[str, Any]]
 
-    # Conversation status
+                         
     phase: Literal[
         "collecting",
         "enhancing",
@@ -114,7 +120,7 @@ class ResumeState(TypedDict):
         "completed"
     ]
 
-    # Resume outputs
+                    
     ats_score: Optional[int]
     ats_feedback: Optional[Dict[str, Any]]
     generated_resume: Optional[str]
