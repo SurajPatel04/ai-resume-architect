@@ -116,5 +116,6 @@ class ResumeState(TypedDict):
 
     # Resume outputs
     ats_score: Optional[int]
+    ats_feedback: Optional[Dict[str, Any]]
     generated_resume: Optional[str]
     pdf_path: Optional[str]

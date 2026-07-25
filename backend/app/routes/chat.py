@@ -312,13 +312,19 @@ async def run_and_stream_graph(websocket: WebSocket, uploaded_text: str | None, 
                 })
 
                 if state_updates.get("phase") == "completed" and state_updates.get("pdf_path"):
+                    full_state = (await graph.aget_state(config)).values
+                    ats_score = full_state.get("ats_score")
+                    msg = f"Your resume is ready! [Download PDF]({state_updates['pdf_path']})"
+                    if ats_score is not None:
+                        msg += f"\n\nYour ATS match score: {ats_score}/100"
+                        
                     await websocket.send_json({
                         "type": "graph_update",
                         "node": "system",
                         "data": {
                             "current_question": {
                                 "field": "system",
-                                "question_text": f"Your resume is ready! [Download PDF]({state_updates['pdf_path']})",
+                                "question_text": msg,
                                 "ui": "text",
                                 "options": []
                             }

@@ -16,6 +16,7 @@ from app.graphs.node.validate_entities import validate_entities
 from app.graphs.node.merge_profile import merge_profile
 from app.graphs.node.enhance_resume import enhance_resume
 from app.graphs.node.render_resume import render_resume
+from app.graphs.node.score_ats import score_ats
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,7 @@ workflow = StateGraph(ResumeState)
 # Add Nodes
 workflow.add_node("planner", planner)
 workflow.add_node("tailor_resume", tailor_resume)
+workflow.add_node("score_ats", score_ats)
 workflow.add_node("parse_document", parse_document)
 workflow.add_node("analyze_gaps", analyze_gaps)
 workflow.add_node("prioritize_queue", prioritize_queue)
@@ -108,7 +110,16 @@ workflow.add_conditional_edges("planner", route_planner, {
     "analyze_gaps": "analyze_gaps"
 })
 
-workflow.add_edge("tailor_resume", "render_resume")
+def route_tailor_resume(state: ResumeState) -> str:
+    if not state.get("job_description"):
+        return END
+    return "score_ats"
+
+workflow.add_conditional_edges("tailor_resume", route_tailor_resume, {
+    "score_ats": "score_ats",
+    END: END
+})
+workflow.add_edge("score_ats", "render_resume")
 workflow.add_edge("parse_document", "analyze_gaps")
 
 workflow.add_edge("extract_entities", "verify_entities")
