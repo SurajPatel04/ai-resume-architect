@@ -65,6 +65,9 @@ class ResumeState(TypedDict):
     session_id: str
     user_id: Optional[str]
 
+    # Target Job
+    job_description: Optional[str]
+
     # Conversation
     messages: List[Dict[str, Any]]
     latest_answer: Optional[str]

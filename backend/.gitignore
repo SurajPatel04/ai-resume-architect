@@ -32,3 +32,8 @@ htmlcov/
 
 # Alembic
 alembic/versions/__pycache__/
+
+# Temporary test scripts
+test_*.py
+test.py
+test.typ
