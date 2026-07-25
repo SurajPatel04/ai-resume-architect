@@ -24,6 +24,10 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+*:Zone.Identifier
+
+# Generated/Uploads
+app/static/pdfs/*.pdf
 
 # Testing
 .pytest_cache/
