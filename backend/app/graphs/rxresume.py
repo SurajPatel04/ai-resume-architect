@@ -27,7 +27,6 @@ from app.graphs.state import (
 SCHEMA_URL = "https://rxresu.me/schema.json"
 SCHEMA_VERSION = "5.0.0"
 
-                                                                
 SECTION_TITLES = {
     "profiles": "Profiles",
     "experience": "Experience",
@@ -43,7 +42,6 @@ SECTION_TITLES = {
     "references": "References",
 }
 
-                                                           
 MAPPED_SECTIONS = ("profiles", "experience", "education", "projects", "skills")
 
 _ID_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")                      
@@ -53,26 +51,21 @@ _LI = re.compile(r"<li[^>]*>(.*?)</li>", re.IGNORECASE | re.DOTALL)
 _BLOCK = re.compile(r"</p>|<br\s*/?>", re.IGNORECASE)
 _PERIOD_SPLIT = re.compile(r"\s*[–—-]\s*|\s+to\s+", re.IGNORECASE)
 
-
 def _stable_id(*parts: str) -> str:
     """Deterministic item id, so re-exporting the same resume doesn't churn ids."""
     return str(uuid.uuid5(_ID_NS, "|".join(parts)))
-
 
 def _item_link(url: str = "") -> Dict[str, Any]:
     """Section-item website object. Note basics.website omits inlineLink."""
     return {"url": url or "", "label": "", "inlineLink": False}
 
-
 def _strip_html(text: str) -> str:
     return unescape(_TAGS.sub("", text or "")).strip()
-
 
 def bullets_to_html(items: List[str]) -> str:
     if not items:
         return ""
     return "<ul>" + "".join(f"<li>{escape(i)}</li>" for i in items if i) + "</ul>"
-
 
 def html_to_bullets(html: str) -> List[str]:
     if not html:
@@ -83,13 +76,11 @@ def html_to_bullets(html: str) -> List[str]:
         chunks = _BLOCK.split(html)
     return [b for b in (_strip_html(c) for c in chunks) if b]
 
-
 def join_period(start: str, end: str) -> str:
     start, end = (start or "").strip(), (end or "").strip()
     if start and end:
         return f"{start} - {end}"
     return start or end
-
 
 def split_period(period: str) -> tuple[str, str]:
     period = (period or "").strip()
@@ -100,7 +91,6 @@ def split_period(period: str) -> tuple[str, str]:
         return parts[0].strip(), parts[1].strip()
     return period, ""
 
-
 def _section(key: str, items: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "title": SECTION_TITLES[key],
@@ -108,7 +98,6 @@ def _section(key: str, items: List[Dict[str, Any]]) -> Dict[str, Any]:
         "hidden": not items,
         "items": items,
     }
-
 
 def _profile_item(network: str, value: str, base_url: str, icon: str) -> Dict[str, Any]:
     """linkedin/github are stored as 'URL or username', so accept either."""
@@ -127,7 +116,6 @@ def _profile_item(network: str, value: str, base_url: str, icon: str) -> Dict[st
         "username": username,
         "website": _item_link(url),
     }
-
 
 def _metadata() -> Dict[str, Any]:
     """Single-column, full-width layout — the ATS-safe arrangement the brief asks for."""
@@ -161,14 +149,12 @@ def _metadata() -> Dict[str, Any]:
         "notes": "",
     }
 
-
 def _picture() -> Dict[str, Any]:
     return {
         "hidden": True, "url": "", "size": 64, "rotation": 0, "aspectRatio": 1.0,
         "borderRadius": 0, "borderColor": "rgba(0, 0, 0, 1)", "borderWidth": 0,
         "shadowColor": "rgba(0, 0, 0, 1)", "shadowWidth": 0,
     }
-
 
 def to_rxresume(resume: Resume | Dict[str, Any]) -> Dict[str, Any]:
     """Our profile -> a document that validates against rxresu.me/schema.json."""
@@ -257,10 +243,8 @@ def to_rxresume(resume: Resume | Dict[str, Any]) -> Dict[str, Any]:
         "metadata": _metadata(),
     }
 
-
 def looks_like_rxresume(doc: Any) -> bool:
     return isinstance(doc, dict) and isinstance(doc.get("sections"), dict) and "basics" in doc
-
 
 def from_rxresume(doc: Dict[str, Any]) -> Resume:
     """An RxResume document -> our profile. Unmapped sections are dropped."""
@@ -344,7 +328,6 @@ def from_rxresume(doc: Dict[str, Any]) -> Resume:
         projects=projects,
     )
 
-
 if __name__ == "__main__":
     original = Resume(
         basics=Basics(
@@ -371,7 +354,6 @@ if __name__ == "__main__":
 
     doc = to_rxresume(original)
 
-                            
     assert set(doc) >= {"picture", "basics", "summary", "sections", "customSections", "metadata"}
     assert set(doc["sections"]) == set(SECTION_TITLES), set(doc["sections"]) ^ set(SECTION_TITLES)
     assert set(doc["metadata"]) == {"template", "layout", "page", "design", "typography", "notes"}
@@ -380,7 +362,6 @@ if __name__ == "__main__":
     assert doc["sections"]["languages"]["items"] == [] and doc["sections"]["languages"]["hidden"]
     assert doc["metadata"]["layout"]["pages"][0]["sidebar"] == [], "must stay single-column for ATS"
 
-                                            
     assert doc["sections"]["education"]["items"][0]["school"] == "IIT Bombay"
     assert doc["sections"]["education"]["items"][0]["degree"] == "B.Tech"
     assert doc["sections"]["education"]["items"][0]["grade"] == "8.9"
@@ -389,11 +370,9 @@ if __name__ == "__main__":
     assert doc["sections"]["profiles"]["items"][0]["username"] == "priyasharma"
     assert doc["sections"]["profiles"]["items"][1]["website"]["url"] == "https://github.com/priyasharma"
 
-                                   
     assert to_rxresume(original)["sections"]["experience"]["items"][0]["id"] ==\
         doc["sections"]["experience"]["items"][0]["id"]
 
-                                                     
     back = from_rxresume(doc)
     assert back.basics.name == original.basics.name
     assert back.basics.github == "https://github.com/priyasharma"
@@ -410,14 +389,12 @@ if __name__ == "__main__":
                                                
     assert back.projects[0].description == "Internal analytics tool", back.projects[0].description
 
-                               
     assert split_period("2016 – 2020") == ("2016", "2020")
     assert split_period("2016-2020") == ("2016", "2020")
     assert split_period("Jan 2020 to Present") == ("Jan 2020", "Present")
     assert split_period("2020") == ("2020", "")
     assert split_period("") == ("", "")
 
-                                                              
     assert html_to_bullets("<p>One thing</p><p>Another</p>") == ["One thing", "Another"]
     assert looks_like_rxresume(doc) and not looks_like_rxresume({"basics": {}})
 

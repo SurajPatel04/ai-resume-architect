@@ -7,7 +7,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
 
-
 class ChatSession(Base):
     """One resume-building conversation.
 
@@ -47,7 +46,6 @@ class ChatSession(Base):
     def __repr__(self) -> str:
         return f"<ChatSession id={self.id} user_id={self.user_id}>"
 
-
 class ChatMessage(Base):
     """One turn of the conversation, human or AI.
 
@@ -73,8 +71,6 @@ class ChatMessage(Base):
 
     content: Mapped[str] = mapped_column(Text, nullable=False)
 
-                                                                                 
-                                                           
     ui: Mapped[str | None] = mapped_column(String(16), nullable=True)
     options: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 

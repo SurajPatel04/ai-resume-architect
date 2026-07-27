@@ -19,40 +19,37 @@ async def lifespan(app: FastAPI):
              
     app.state.llm = get_openai_llm()
     
-                                                      
-                                                                      
     db_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
-    pool = AsyncConnectionPool(
+                                                                                 
+    async with AsyncConnectionPool(
         conninfo=db_url,
         max_size=20,
+        open=False,
         kwargs={"autocommit": True, "prepare_threshold": 0},
-    )
-                                  
-    await pool.wait()
-    
-    checkpointer = AsyncPostgresSaver(pool)
-    await checkpointer.setup()
-    
-    app.state.graph = workflow.compile(checkpointer=checkpointer)
-    app.state.checkpointer_pool = pool
-    
-    yield
-              
-    await dispose_engine()
-    await pool.close()
+    ) as pool:
+                                                                                      
+        await pool.wait()
+
+        checkpointer = AsyncPostgresSaver(pool)
+        await checkpointer.setup()
+
+        app.state.graph = workflow.compile(checkpointer=checkpointer)
+        app.state.checkpointer_pool = pool
+
+        yield
+
+        await dispose_engine()
 
 app = FastAPI(lifespan=lifespan)
 
-                                        
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],                                         
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-                                 
 pdf_dir = os.path.join(os.path.dirname(__file__), "static", "pdfs")
 os.makedirs(pdf_dir, exist_ok=True)
 app.mount("/pdfs", StaticFiles(directory=pdf_dir), name="pdfs")

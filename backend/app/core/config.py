@@ -13,7 +13,6 @@ class RefreshTokenSettings(BaseModel):
     ALGORITHM: str = "HS256"
     EXPIRE_MINUTES: int = 30
 
-
 class Settings(BaseSettings):
          
     APP_NAME: str = "AI Resume Architect"
@@ -21,18 +20,17 @@ class Settings(BaseSettings):
                                                                    
     PUBLIC_BASE_URL: str = "http://localhost:8000"
 
-              
+    CORS_ORIGINS: str = "http://localhost:3000"
+
     DATABASE_URL: str
 
-         
     ACCESS_TOKEN: AccessTokenSettings
     REFRESH_TOKEN: RefreshTokenSettings
 
-        
     OPENAI_API_KEY: str | None = None
     GEMINI_API_KEY: str | None = None
+    DEEPGRAM_API_KEY: str | None = None
 
-           
     REDIS_URL: str | None = None
 
     model_config = SettingsConfigDict(
@@ -42,10 +40,13 @@ class Settings(BaseSettings):
         env_nested_delimiter="__",
     )
 
+    @property
+    def cors_origins(self) -> list[str]:
+        """Comma-separated in env, list here. Credentialed requests can't use "*"."""
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-
 
 settings = get_settings()

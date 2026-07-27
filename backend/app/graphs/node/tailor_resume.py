@@ -6,18 +6,15 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-
 class TailoredExperience(BaseModel):
     highlights: List[str] = Field(
         description="Reworded highlights for this experience, reordered and rephrased to emphasize relevance to the target job. Same facts, no invented experience."
     )
 
-
 class TailoredProject(BaseModel):
     highlights: List[str] = Field(
         description="Reworded highlights for this project, emphasizing relevance to the target job. Same facts, no invented experience."
     )
-
 
 class TailoredResult(BaseModel):
     summary_content: str = Field(
@@ -34,7 +31,6 @@ class TailoredResult(BaseModel):
         description="The candidate's EXISTING skill keywords, reordered so the ones most relevant to the job come first. Do not add skills the candidate doesn't have."
     )
 
-
 def tailor_resume(state: ResumeState) -> Dict[str, Any]:
     """
     Tailors the master_profile against a job description.
@@ -48,17 +44,16 @@ def tailor_resume(state: ResumeState) -> Dict[str, Any]:
     pending = state.get("current_question") or {}
     latest_answer = state.get("latest_answer")
 
-                                                                                 
-                                                                                      
-    if not job_description and latest_answer and pending.get("field") == "system":
+    if not job_description and latest_answer and pending.get("field") == "awaiting_jd":
         job_description = latest_answer
 
     if not job_description or not job_description.strip():
         logger.info("No job_description present. Asking user to provide one.")
         ask = "Sure — paste the job description you'd like me to tailor your resume for."
         return {
+                                                                                  
             "current_question": {
-                "field": "system",
+                "field": "awaiting_jd",
                 "question_text": ask,
                 "ui": "text",
                 "options": []
@@ -116,7 +111,6 @@ def tailor_resume(state: ResumeState) -> Dict[str, Any]:
 
         if tailored.skills_order and r.get("skills"):
                                                                                 
-                                                                               
             rank = {s: i for i, s in enumerate(tailored.skills_order)}
             for cat in r["skills"]:
                 cat["keywords"] = sorted(

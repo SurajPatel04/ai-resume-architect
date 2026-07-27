@@ -9,10 +9,8 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import settings
 
-
 class Base(DeclarativeBase):
     pass
-
 
 engine = create_async_engine(
     settings.DATABASE_URL,
@@ -30,7 +28,6 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
 )
 
-
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency. Yields a session and rolls back on failure."""
     async with AsyncSessionLocal() as session:
@@ -41,7 +38,6 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await session.close()
-
 
 async def dispose_engine() -> None:
     """Close the connection pool. Call from the app shutdown/lifespan handler."""

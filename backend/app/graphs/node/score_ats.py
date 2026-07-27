@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-
 class ATSResult(BaseModel):
     score: int = Field(description="ATS match score from 0 to 100 for how well the resume fits the job description.")
     matched_keywords: List[str] = Field(
@@ -20,7 +19,6 @@ class ATSResult(BaseModel):
     feedback: str = Field(
         description="2-3 sentences of concrete, actionable feedback on how to improve the match. No fabricated advice."
     )
-
 
 def score_ats(state: ResumeState) -> Dict[str, Any]:
     """

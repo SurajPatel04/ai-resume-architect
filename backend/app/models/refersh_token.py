@@ -10,7 +10,6 @@ from app.core.db import Base
 if TYPE_CHECKING:
     from app.models.users import User
 
-
 class RefreshToken(Base):
     __tablename__ = "refresh_tokens"
     __table_args__ = (

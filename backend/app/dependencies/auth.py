@@ -17,7 +17,6 @@ credentials_exception = HTTPException(
     detail="Not authenticated",
 )
 
-
 def verify_access_token_with_exp(token: str) -> tuple[uuid.UUID, float]:
     try:
         payload = jwt.decode(
@@ -38,11 +37,9 @@ def verify_access_token_with_exp(token: str) -> tuple[uuid.UUID, float]:
         logger.warning("Access token verification failed: %r", exc)
         raise credentials_exception from exc
 
-
 def verify_access_token(token: str) -> uuid.UUID:
     user_id, _ = verify_access_token_with_exp(token)
     return user_id
-
 
 async def get_current_user(
     request: Request,
@@ -61,7 +58,6 @@ async def get_current_user(
         raise credentials_exception
 
     return user
-
 
 async def get_current_user_ws(
     websocket: WebSocket,

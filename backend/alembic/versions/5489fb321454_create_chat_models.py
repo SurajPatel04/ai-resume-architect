@@ -11,12 +11,10 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-                                        
 revision: str = '5489fb321454'
 down_revision: Union[str, Sequence[str], None] = '6f26eaff3359'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
-
 
 def upgrade() -> None:
     """Upgrade schema."""
@@ -45,8 +43,6 @@ def upgrade() -> None:
     )
     op.create_index('ix_chat_messages_session_id', 'chat_messages', ['session_id', 'id'], unique=False)
                                   
-
-
 def downgrade() -> None:
     """Downgrade schema."""
                                                                  

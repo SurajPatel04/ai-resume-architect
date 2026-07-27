@@ -14,7 +14,6 @@ from app.services.auth_service import create_both_tokens
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
-
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def sign_up(
     body: SignUpRequest,
@@ -44,7 +43,6 @@ async def sign_up(
     await db.refresh(user)
 
     return user
-
 
 @router.post("/signin", response_model=UserResponse)
 async def sign_in(
@@ -83,7 +81,6 @@ async def sign_in(
 
     return user
 
-
 @router.post("/logout")
 async def log_out(
     request: Request,
@@ -103,7 +100,6 @@ async def log_out(
     response.delete_cookie(key="access_token")
     response.delete_cookie(key="refresh_token")
     return {"message": "Successfully logged out"}
-
 
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user: Annotated[User, Depends(get_current_user)]):

@@ -2,22 +2,17 @@ import logging
 import re
 from datetime import datetime
 from typing import Any, Dict, List
-from app.graphs.apply import impact_key
 from app.graphs.state import ResumeState
 
 logger = logging.getLogger(__name__)
-
-                                                                        
-MAX_IMPACT_QUESTIONS = 3
 
 EXEC_TITLES = (
     "chief", "ceo", "cto", "coo", "cfo", "cmo", "vp", "vice president", "president",
     "head of", "director", "partner", "founder", "principal",
 )
 
-                                                         
 SUPPRESSED_SECTIONS = {
-                                                                      
+
     "executive": ("projects",),
     "senior": (),
     "mid": (),
@@ -25,13 +20,73 @@ SUPPRESSED_SECTIONS = {
     "unknown": (),
 }
 
+SECTION_ORDER = {
+    "fresher": ("career_level", "basics", "education", "projects", "target_role", "skills"),
+    "internship": ("career_level", "basics", "education", "experience", "projects", "target_role", "skills"),
+    "experienced": ("career_level", "basics", "experience", "education", "target_role", "skills", "projects"),
+}
+
+DEFAULT_ORDER = SECTION_ORDER["experienced"]
+
+CAREER_SUPPRESSED = {"fresher": ("experience",)}
+
+KIND_RANK = {"required": 0, "recommended": 1}
+
+MORE_FIELDS = {
+    "experience": ["company", "position", "start_date", "end_date", "highlights"],
+    "education": ["institution", "area"],
+    "projects": ["name", "highlights"],
+}
+
+def more_gate(section: str, count: int) -> Dict[str, Any]:
+    """The "anything else for this section?" question, asked once its entries are listed.
+
+    A gate, so "yes" opens the next empty entry and "no" marks the whole section skipped —
+    which is what ends the loop. Always "recommended" so it sorts behind the holes in the
+    entries that are already there: finish what's on the resume before adding to it.
+    """
+    return {
+        "field": f"{section}[{count}]",
+        "section": section,
+        "kind": "recommended",
+        "missing_fields": MORE_FIELDS[section],
+        "is_gate": True,
+                                                                                           
+        "is_more": True,
+        "reason": f"{count} {section} entr{'y' if count == 1 else 'ies'} recorded; there may be more.",
+    }
+
+def is_skipped_gap(gap: Dict[str, Any], skipped: List[str]) -> bool:
+    """Whether every part of a queued question has already been declined."""
+    section = gap.get("section")
+    field = gap.get("field")
+    if section in skipped or field in skipped:
+        return True
+    missing = gap.get("missing_fields") or []
+    return bool(missing) and all(f"{field}.{name}" in skipped for name in missing)
+
+def is_resolved_gap(resume: Dict[str, Any], gap: Dict[str, Any]) -> bool:
+    """Whether a queued question is stale because its requested fields now exist."""
+    if gap.get("is_more") or gap.get("is_gate"):
+        return False
+    fields = gap.get("missing_fields") or []
+    if not fields:
+        return False
+    field = gap.get("field") or ""
+    section, _, index = field.partition("[")
+    value: Any = resume.get(section) or {}
+    if index:
+        if not isinstance(value, list):
+            return False
+        item_index = int(index.rstrip("]") or 0)
+        value = value[item_index] if item_index < len(value) else {}
+    return isinstance(value, dict) and all(bool(value.get(name)) for name in fields)
+
+BASIC_FIELDS = ("name", "email", "phone", "location", "linkedin", "github", "website")
+
+REQUIRED_BASICS = ("name", "email", "phone")
+
 _YEAR = re.compile(r"(?:19|20)\d{2}")
-
-
-def _has_metric(text: str) -> bool:
-                                                                                             
-    return any(ch.isdigit() for ch in text or "")
-
 
 def _years_of_experience(experience: List[Dict[str, Any]]) -> int:
     """Span from earliest start to latest end.
@@ -56,14 +111,14 @@ def _years_of_experience(experience: List[Dict[str, Any]]) -> int:
         return 0
     return max(max(ends, default=this_year) - min(starts), 0)
 
-
 def infer_seniority(resume: Dict[str, Any]) -> str:
     """Bucket the candidate so the interview can skip questions that don't apply.
 
     Returns "unknown" until there's at least one job to judge by — guessing from an
     empty profile would suppress the very questions that fill it in.
     """
-    experience = resume.get("experience") or []
+                                                                                     
+    experience = [e for e in (resume.get("experience") or []) if any(e.values())]
     if not experience:
         return "unknown"
 
@@ -80,7 +135,6 @@ def infer_seniority(resume: Dict[str, Any]) -> str:
         return "mid"
     return "entry"
 
-
 def analyze_gaps(state: ResumeState) -> Dict[str, Any]:
     """
     Examines the current master_profile and identifies missing or incomplete fields.
@@ -92,11 +146,10 @@ def analyze_gaps(state: ResumeState) -> Dict[str, Any]:
     else:
         r = resume
 
-                                      
-    total_fields = 5
+    total_fields = len(BASIC_FIELDS)
     missing_count = 0
     basics = r.get("basics", {})
-    for f in ["name", "email", "phone", "location", "linkedin"]:
+    for f in BASIC_FIELDS:
         if not basics.get(f): missing_count += 1
         
     experience = r.get("experience", [])
@@ -136,40 +189,47 @@ def analyze_gaps(state: ResumeState) -> Dict[str, Any]:
     completion = int(((total_fields - missing_count) / total_fields) * 100) if total_fields > 0 else 0
     logger.info(f"Calculated profile completion: {completion}%")
 
-    existing_queue = state.get("question_queue", [])
+    skipped = state.get("skipped") or []
+    existing_queue = [
+        gap for gap in (state.get("question_queue") or [])
+        if not is_skipped_gap(gap, skipped) and not is_resolved_gap(r, gap)
+    ]
     if existing_queue:
-        logger.info(f"question_queue has {len(existing_queue)} items remaining. Skipping gap analysis.")
-        return {"completion": completion}
+        logger.info("question_queue has %d unskipped item(s) remaining. Skipping gap analysis.", len(existing_queue))
+        return {"completion": completion, "question_queue": existing_queue}
         
     logger.info("question_queue is empty. Recomputing gaps...")
     gaps = []
         
-    skipped = state.get("skipped", [])
-    if skipped is None:
-        skipped = []
-
-                                                                                       
-                                                                                         
-                                                                          
     seniority = infer_seniority(r)
-    suppressed = set(SUPPRESSED_SECTIONS.get(seniority, ()))
+    career_level = state.get("career_level")
+    suppressed = set(SUPPRESSED_SECTIONS.get(seniority, ())) | set(CAREER_SUPPRESSED.get(career_level, ()))
     if suppressed:
-        logger.info("Seniority %s — not asking about: %s", seniority, ", ".join(sorted(suppressed)))
+        logger.info("Seniority %s / %s — not asking about: %s",
+                    seniority, career_level or "unclassified", ", ".join(sorted(suppressed)))
     section_skips = set(skipped) | suppressed
 
-            
+    if not career_level and not experience and "career_level" not in skipped:
+        gaps.append({
+            "field": "career_level",
+            "section": "career_level",
+            "kind": "required",
+            "missing_fields": [],
+            "is_gate": True,
+            "reason": "Don't know yet whether they're a fresher, an intern, or working.",
+        })
+
     if "basics" not in section_skips:
         basics = r.get("basics", {})
         basics_missing = []
-        for f in ["name", "email", "phone", "location", "linkedin"]:
+        for f in BASIC_FIELDS:
             if not basics.get(f):
                 basics_missing.append(f)
-                
-                                                
+
         basics_missing = [f for f in basics_missing if f"basics.{f}" not in skipped]
-        
+
         if basics_missing:
-            kind = "required" if any(f in basics_missing for f in ["name", "email", "phone"]) else "recommended"
+            kind = "required" if any(f in basics_missing for f in REQUIRED_BASICS) else "recommended"
             gaps.append({
                 "field": "basics",
                 "section": "basics",
@@ -179,7 +239,6 @@ def analyze_gaps(state: ResumeState) -> Dict[str, Any]:
                 "reason": f"Missing basic info: {', '.join(basics_missing)}."
             })
 
-                
     if "experience" not in section_skips:
         experience = r.get("experience", [])
         if not experience:
@@ -187,21 +246,23 @@ def analyze_gaps(state: ResumeState) -> Dict[str, Any]:
                 "field": "experience[0]",
                 "section": "experience",
                 "kind": "required",
-                "missing_fields": ["company", "position", "highlights"],
+                "missing_fields": ["company", "position", "start_date", "end_date", "highlights"],
                 "is_gate": True,
                 "reason": "No work experience listed."
             })
         else:
             for i, exp in enumerate(experience):
                 exp_missing = []
-                for f in ["company", "position", "highlights"]:
+                for f in ["company", "position", "start_date", "end_date", "highlights"]:
                     if not exp.get(f):
                         exp_missing.append(f)
                         
                 exp_missing = [f for f in exp_missing if f"experience[{i}].{f}" not in skipped]
                 
                 if exp_missing:
-                    kind = "required" if any(f in exp_missing for f in ["company", "position"]) else "recommended"
+                    kind = "required" if any(
+                        f in exp_missing for f in ["company", "position", "start_date", "end_date"]
+                    ) else "recommended"
                     gaps.append({
                         "field": f"experience[{i}]",
                         "section": "experience",
@@ -210,8 +271,8 @@ def analyze_gaps(state: ResumeState) -> Dict[str, Any]:
                         "is_gate": False,
                         "reason": f"Experience entry {i+1} is missing: {', '.join(exp_missing)}."
                     })
+            gaps.append(more_gate("experience", len(experience)))
 
-               
     if "education" not in section_skips:
         education = r.get("education", [])
         if not education:
@@ -242,32 +303,45 @@ def analyze_gaps(state: ResumeState) -> Dict[str, Any]:
                         "is_gate": False,
                         "reason": f"Education entry {i+1} is missing: {', '.join(edu_missing)}."
                     })
-
-            
+                                                                                  
     if "skills" not in section_skips:
         skills = r.get("skills", [])
         if not skills:
+                                                                                         
+            if not state.get("target_role") and "target_role" not in skipped:
+                gaps.append({
+                    "field": "target_role",
+                    "section": "target_role",
+                    "kind": "required",
+                    "missing_fields": [],
+                    "is_gate": True,
+                    "reason": "Skills should be asked for a specific role, not in general.",
+                })
+
             gaps.append({
                 "field": "skills",
                 "section": "skills",
                 "kind": "required",
-                "missing_fields": [],
+                                                                                        
+                "missing_fields": ["skills"],
                 "is_gate": True,
                 "reason": "No skills listed."
             })
 
-              
     if "projects" not in section_skips:
         projects = r.get("projects", [])
         if not projects:
             gaps.append({
                 "field": "projects[0]",
                 "section": "projects",
-                                                                                      
-                "kind": "required" if seniority == "entry" else "recommended",
+                                                                                     
+                "kind": "required" if career_level in ("fresher", "internship")
+                        or seniority == "entry" else "recommended",
                 "missing_fields": ["name", "highlights"],
-                "is_gate": True,
-                "reason": "No projects listed."
+                                                                                      
+                "is_gate": False,
+                "skip_section_if_empty": True,
+                "reason": "No projects listed; ask for the first project directly."
             })
         else:
             for i, proj in enumerate(projects):
@@ -287,38 +361,20 @@ def analyze_gaps(state: ResumeState) -> Dict[str, Any]:
                         "is_gate": False,
                         "reason": f"Project entry {i+1} is missing: {', '.join(proj_missing)}."
                     })
+            gaps.append(more_gate("projects", len(projects)))
 
-                                                                          
-                                                                               
-                                                                          
-    impact_gaps = []
-    for section_name in ("experience", "projects"):
-        if section_name in skipped:
-            continue
-        for i, item in enumerate(r.get(section_name) or []):
-            for j, hl in enumerate(item.get("highlights") or []):
-                if _has_metric(hl) or impact_key(f"{section_name}[{i}]", j) in skipped:
-                    continue
-                impact_gaps.append({
-                    "field": f"{section_name}[{i}]",
-                    "section": "impact",
-                    "kind": "impact",
-                    "missing_fields": ["metric"],
-                    "is_gate": False,
-                    "bullet_index": j,
-                    "weak_bullet": hl,
-                    "reason": f'This bullet has no measurable result: "{hl}"',
-                })
-    impact_gaps = impact_gaps[:MAX_IMPACT_QUESTIONS]
-
-                                                                                                                                                     
     filtered_gaps = [g for g in gaps if g["field"] not in skipped]
 
-                                                           
-    required_gaps = [g for g in filtered_gaps if g.get("kind") == "required"]
-    recommended_gaps = [g for g in filtered_gaps if g.get("kind") == "recommended"]
+    order = SECTION_ORDER.get(career_level, DEFAULT_ORDER)
 
-    sorted_queue = required_gaps + impact_gaps + recommended_gaps
+    def rank(gap: Dict[str, Any]) -> tuple:
+        section = gap.get("section", "")
+        return (
+            order.index(section) if section in order else len(order),
+            KIND_RANK.get(gap.get("kind"), 1),
+        )
+
+    sorted_queue = sorted(filtered_gaps, key=rank)
 
     logger.info(f"Built question_queue with {len(sorted_queue)} gaps.")
     
@@ -329,7 +385,6 @@ def analyze_gaps(state: ResumeState) -> Dict[str, Any]:
         "seniority": seniority,
     }
 
-
 if __name__ == "__main__":
     now = datetime.now().year
 
@@ -337,19 +392,27 @@ if __name__ == "__main__":
         return {"company": "Acme", "position": position, "start_date": start,
                 "end_date": end, "highlights": highlights or ["Did a thing"]}
 
-    def run(profile):
-        return analyze_gaps({"master_profile": profile, "question_queue": [], "skipped": []})
+    def run(profile, **state):
+        return analyze_gaps({"master_profile": profile, "question_queue": [], "skipped": [], **state})
 
     def sections(result):
         return {g["section"] for g in result["question_queue"]}
 
-                                               
+    def order_of(result):
+        return [g["section"] for g in result["question_queue"]]
+
+    def visits(result):
+        """Sections in the order they are entered, consecutive runs collapsed to one."""
+        asked = order_of(result)
+        return [s for i, s in enumerate(asked) if i == 0 or s != asked[i - 1]]
+
+    EMPTY = {"experience": [], "projects": [], "education": [], "skills": [], "basics": {}}
+
     assert _years_of_experience([job(start="2000", end="2020")]) == 20
     assert _years_of_experience([job(start="2020", end="Present")]) == now - 2020
     assert _years_of_experience([job(start="2018", end="2021"), job(start="2021", end="2024")]) == 6
     assert _years_of_experience([job()]) == 0, "undated experience shouldn't invent tenure"
 
-               
     assert infer_seniority({"experience": []}) == "unknown", "never guess from an empty profile"
     assert infer_seniority({"experience": [job("Head of Marketing", "2022", "2024")]}) == "executive"
     assert infer_seniority({"experience": [job("VP Engineering", "2023", "2024")]}) == "executive"
@@ -358,38 +421,119 @@ if __name__ == "__main__":
     assert infer_seniority({"experience": [job(start="2021", end="2024")]}) == "mid"
     assert infer_seniority({"experience": [job(start="2024", end="2024")]}) == "entry"
 
-                                                     
     exec_result = run({"experience": [job("Director of Engineering", "2015", "2024")],
                        "projects": [], "education": [], "skills": [], "basics": {}})
     assert exec_result["seniority"] == "executive"
     assert "projects" not in sections(exec_result), sections(exec_result)
 
-                                                           
     junior = run({"experience": [job(start="2024", end="2024")],
                   "projects": [], "education": [], "skills": [], "basics": {}})
     assert junior["seniority"] == "entry"
     projects_gap = next(g for g in junior["question_queue"] if g["section"] == "projects")
     assert projects_gap["kind"] == "required", projects_gap
-    order = {"required": 0, "impact": 1, "recommended": 2}
-    ranks = [order[g["kind"]] for g in junior["question_queue"]]
-    assert ranks == sorted(ranks), f"queue out of priority order: {ranks}"
 
-                                                  
-    blank = run({"experience": [], "projects": [], "education": [], "skills": [], "basics": {}})
+    part_way = run(
+        {"basics": {"name": "S", "email": "s@x.com", "phone": "1"},
+         "education": [{"institution": "Amity University", "area": ""}],
+         "projects": [{"name": "Manim generator", "highlights": []}],
+         "experience": [], "skills": []},
+        career_level="fresher",
+    )
+    assert visits(part_way) == ["basics", "education", "projects", "target_role", "skills"],\
+        order_of(part_way)
+
+    two_jobs = run({**EMPTY, "experience": [
+        {"company": "Acme", "position": "Engineer", "highlights": []},
+        {"company": "", "position": "", "highlights": ["Did a thing"]},
+    ]}, career_level="experienced")
+    jobs_asked = [g["field"] for g in two_jobs["question_queue"] if g["section"] == "experience"]
+    assert jobs_asked == ["experience[0]", "experience[1]", "experience[2]"], jobs_asked
+
+    for result in (part_way, two_jobs, junior):
+        seen = visits(result)
+        assert len(seen) == len(set(seen)), f"section revisited: {order_of(result)}"
+
+    one_degree = run({**EMPTY, "education": [{"institution": "Amity University", "area": "MCA"}]},
+                     career_level="fresher")
+    assert "education" not in sections(one_degree), one_degree["question_queue"]
+    first_project = next(g for g in one_degree["question_queue"] if g["section"] == "projects")
+    assert not first_project["is_gate"] and first_project["field"] == "projects[0]", first_project
+
+    complete_job = job(start="Dec 2025", end="Present", highlights=["Built APIs"])
+    stale = {"field": "experience[0]", "section": "experience", "is_gate": False,
+             "missing_fields": ["start_date", "end_date", "highlights"]}
+    assert is_resolved_gap({"experience": [complete_job]}, stale)
+
+    assert "education" not in sections(run(
+        {**EMPTY, "education": [{"institution": "Amity University", "area": "MCA"}]},
+        career_level="fresher", skipped=["education"]))
+
+    blank = run(EMPTY)
     assert blank["seniority"] == "unknown"
     assert {"experience", "education", "skills", "projects"} <= sections(blank), sections(blank)
 
-                                                    
+    assert order_of(blank)[0] == "career_level", order_of(blank)
+
+    fresher = run(EMPTY, career_level="fresher")
+    assert "career_level" not in sections(fresher)
+    assert "experience" not in sections(fresher), sections(fresher)
+    assert order_of(fresher) == ["basics", "education", "projects", "target_role", "skills"], order_of(fresher)
+    assert next(g for g in fresher["question_queue"] if g["section"] == "projects")["kind"] == "required"
+
+    intern = run(EMPTY, career_level="internship")
+    assert order_of(intern) == ["basics", "education", "experience", "projects", "target_role", "skills"]
+
+    working = run(EMPTY, career_level="experienced")
+    assert order_of(working) == ["basics", "experience", "education", "target_role", "skills", "projects"]
+    assert next(g for g in working["question_queue"] if g["section"] == "projects")["kind"] == "recommended"
+
+    for result in (fresher, intern, working, blank):
+        sections_asked = order_of(result)
+        assert sections_asked.index("target_role") < sections_asked.index("skills"), sections_asked
+
+    assert "target_role" not in sections(run(EMPTY, target_role="Backend Engineer"))
+    assert "target_role" not in sections(analyze_gaps(
+        {"master_profile": EMPTY, "question_queue": [], "skipped": ["target_role"]}))
+    assert "career_level" not in sections(analyze_gaps(
+        {"master_profile": EMPTY, "question_queue": [], "skipped": ["career_level"]}))
+
+    listed = run({**EMPTY, "skills": [{"name": "Languages", "keywords": ["Python"]}]})
+    assert "target_role" not in sections(listed) and "skills" not in sections(listed)
+
+    imported = run({**EMPTY, "experience": [job(start="2019", end="Present")]})
+    assert "career_level" not in sections(imported), sections(imported)
+
     assert "skipped" not in exec_result, "suppression is per-run, not persisted"
 
-                                                                                 
-                                                                              
-    exec_with_projects = run({
-        "experience": [job("Director of Engineering", "2015", "2024")],
-        "projects": [{"name": "Compiler", "highlights": ["Rewrote the parser"]}],
-        "education": [], "skills": [], "basics": {},
+    links = run({"basics": {"name": "S", "email": "s@x.com", "phone": "1", "location": "Delhi"}},
+                career_level="fresher")
+    basics_gap = next(g for g in links["question_queue"] if g["section"] == "basics")
+    assert basics_gap["missing_fields"] == ["linkedin", "github", "website"], basics_gap
+    assert basics_gap["kind"] == "recommended", "a portfolio link is not worth blocking on"
+    assert sum(1 for g in links["question_queue"] if g["section"] == "basics") == 1,\
+        "three links must not become three questions"
+
+    one_left = analyze_gaps({"master_profile": {"basics": {"name": "S", "email": "e", "phone": "1",
+                                                           "location": "D", "github": "gh"}},
+                             "question_queue": [], "skipped": ["basics.website"]})
+    assert next(g for g in one_left["question_queue"] if g["section"] == "basics")["missing_fields"]\
+        == ["linkedin"], "a skipped link must not come back"
+
+    written = run({
+        "basics": {"name": "S", "email": "s@x.com", "phone": "1", "location": "Delhi",
+                   "linkedin": "in/s", "github": "gh/s", "website": "s.dev"},
+        "experience": [{**job(start="2020", end="2024"), "highlights": ["Did the thing"]}],
+        "education": [{"institution": "IIT", "area": "CS"}],
+        "skills": [{"name": "Languages", "keywords": ["Python"]}],
+        "projects": [{"name": "Parser", "highlights": ["Wrote it"]}],
     })
-    impact = [g for g in exec_with_projects["question_queue"] if g["section"] == "impact"]
-    assert any(g["field"] == "projects[0]" for g in impact), impact
+                                                                                        
+    assert order_of(written) == ["experience", "projects"], order_of(written)
+    assert all(g.get("is_more") for g in written["question_queue"]), written["question_queue"]
+    assert visits(written) == list(dict.fromkeys(order_of(written))), "still one section at a time"
+
+    settled = analyze_gaps({"master_profile": written["master_profile"], "question_queue": [],
+                            "skipped": ["experience", "education", "projects"]})
+    assert settled["question_queue"] == [], settled["question_queue"]
 
     print("analyze_gaps ok")

@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 
 TITLE_MAX = 60
 
-
 async def ensure_session(db: AsyncSession, session_id: str, user_id: uuid.UUID, title: str) -> bool:
     """Create the session row if new. False means it belongs to someone else.
 
@@ -23,7 +22,6 @@ async def ensure_session(db: AsyncSession, session_id: str, user_id: uuid.UUID, 
     db.add(ChatSession(id=session_id, user_id=user_id, title=title[:TITLE_MAX] or "New resume"))
     await db.commit()
     return True
-
 
 async def add_message(
     db: AsyncSession,
@@ -48,11 +46,9 @@ async def add_message(
     )
     await db.commit()
 
-
 async def owns_session(db: AsyncSession, session_id: str, user_id: uuid.UUID) -> bool:
     session = await db.get(ChatSession, session_id)
     return bool(session and session.user_id == user_id)
-
 
 async def list_sessions(db: AsyncSession, user_id: uuid.UUID, limit: int = 50) -> list[dict]:
     rows = await db.scalars(
@@ -65,7 +61,6 @@ async def list_sessions(db: AsyncSession, user_id: uuid.UUID, limit: int = 50) -
         {"session_id": s.id, "title": s.title, "updated_at": s.updated_at.isoformat()}
         for s in rows
     ]
-
 
 async def get_messages(db: AsyncSession, session_id: str, user_id: uuid.UUID) -> list[dict] | None:
     """The session's transcript, or None if it isn't this user's."""

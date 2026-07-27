@@ -8,7 +8,6 @@ from app.core.config import settings
 from app.core.security import hash_token
 from app.models.refersh_token import RefreshToken
 
-
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(
@@ -21,7 +20,6 @@ def create_access_token(data: dict) -> str:
         algorithm=settings.ACCESS_TOKEN.ALGORITHM,
     )
 
-
 def create_refresh_token(data: dict) -> str:
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(
@@ -33,7 +31,6 @@ def create_refresh_token(data: dict) -> str:
         settings.REFRESH_TOKEN.SECRET_KEY,
         algorithm=settings.REFRESH_TOKEN.ALGORITHM,
     )
-
 
 async def create_both_tokens(db: AsyncSession, user_id: uuid.UUID) -> dict[str, str]:
     access_token = create_access_token({"sub": str(user_id)})

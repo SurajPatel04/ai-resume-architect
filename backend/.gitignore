@@ -33,11 +33,16 @@ app/static/pdfs/*.pdf
 .pytest_cache/
 .coverage
 htmlcov/
+test*.py
+*_test.py
+test*.md
+*_test.md
+tests/
+conftest.py
 
 # Alembic
 alembic/versions/__pycache__/
 
-# Temporary test scripts
-test_*.py
+# Temporary test scratch files
 test.py
 test.typ

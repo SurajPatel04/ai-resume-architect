@@ -21,9 +21,41 @@ def process_verification(state: ResumeState) -> Dict[str, Any]:
     verifying_field = current_question.get("verifying_field")
     
     extracted = state.get("extracted_entities", {})
+                                                                                    
+    if "items" in extracted:
+        item_index = current_question.get("verifying_item", 0)
+        items = list(extracted.get("items") or [])
+        if not isinstance(item_index, int) or item_index < 0 or item_index >= len(items)\
+                or verifying_field not in items[item_index]:
+            logger.warning("Could not find typed field %r on item %r.", verifying_field, item_index)
+            return {"latest_answer": None}
+
+        item = dict(items[item_index])
+        value = item[verifying_field]
+        result = None
+        try:
+            prompt = f"""
+            The user was asked to verify the extracted value '{value}' for the field '{verifying_field}'.
+            User's answer: "{latest_answer}"
+
+            Did the user confirm the value is correct? If they provided a correction, extract it.
+            """
+            result = get_openai_llm().with_structured_output(VerificationResult).invoke(prompt)
+            if not result.is_correct and result.corrected_value:
+                item[verifying_field] = result.corrected_value
+        except Exception as e:
+            logger.error("Failed to process typed verification: %s", e)
+
+        items[item_index] = item
+        extracted["items"] = items
+        extracted["confidence"] = [
+            c for c in extracted.get("confidence") or []
+            if not (c.get("item", 0) == item_index and c.get("field") == verifying_field)
+        ]
+        return {"extracted_entities": extracted, "latest_answer": None}
+
     entities = extracted.get("entities", [])
     
-                                    
     entity_idx = -1
     entity = None
     for i, e in enumerate(entities):

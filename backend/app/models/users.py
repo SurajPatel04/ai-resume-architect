@@ -11,7 +11,6 @@ from app.core.db import Base
 if TYPE_CHECKING:
     from app.models.refresh_token import RefreshToken
 
-
 class User(Base):
     __tablename__ = "users"
     __table_args__ = (

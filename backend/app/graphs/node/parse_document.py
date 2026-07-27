@@ -17,11 +17,8 @@ def parse_document(state: ResumeState) -> Dict[str, Any]:
     uploaded_file = state.get("uploaded_file")
     uploaded_text = state.get("uploaded_text")
 
-                                                                                  
-                                                                                 
     consumed = {"uploaded_text": None, "uploaded_file": None}
 
-                                                                    
     if not uploaded_text and uploaded_file:
         logger.info(f"Parsing PDF document from file path: {uploaded_file}")
         uploaded_text = parse_pdf(uploaded_file)
@@ -30,7 +27,6 @@ def parse_document(state: ResumeState) -> Dict[str, Any]:
         logger.warning("No uploaded text or file available to parse.")
         return consumed
 
-                                                                              
     try:
         doc = json.loads(uploaded_text)
         if looks_like_rxresume(doc):
@@ -39,7 +35,6 @@ def parse_document(state: ResumeState) -> Dict[str, Any]:
     except (json.JSONDecodeError, TypeError, ValueError):
         pass                                                 
 
-                                                                              
     llm = get_openai_llm()
     structured_llm = llm.with_structured_output(Resume)
 
@@ -59,7 +54,5 @@ def parse_document(state: ResumeState) -> Dict[str, Any]:
         return {"master_profile": parsed_profile, **consumed}
     except Exception as e:
                                                                              
-                                                                                  
-                                                            
         logger.error(f"Error during structured LLM parsing: {e}")
         return consumed

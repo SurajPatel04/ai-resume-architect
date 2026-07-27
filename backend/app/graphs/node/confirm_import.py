@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 CONFIRM_CHIP = "Yes, that's right"
 
-
 class FieldCorrection(BaseModel):
     path: str = Field(
         description="Dotted path to the single field to fix, e.g. 'basics.name', "
@@ -28,7 +27,6 @@ class FieldCorrection(BaseModel):
         "Indexes are 0-based and refer to the list shown in the profile."
     )
     value: str = Field(description="The corrected value, exactly as the user gave it.")
-
 
 class ImportReview(BaseModel):
     confirmed: bool = Field(
@@ -40,10 +38,8 @@ class ImportReview(BaseModel):
         "Never invent a correction the user did not state.",
     )
 
-
 def _plural(items: list, word: str) -> str:
     return f"{len(items)} {word}{'' if len(items) == 1 else 's'}"
-
 
 def summarise(r: Dict[str, Any]) -> str:
     """Plain-language account of what was parsed.
@@ -71,14 +67,12 @@ def summarise(r: Dict[str, Any]) -> str:
 
     return ", ".join(parts)
 
-
 def split_path(path: str) -> Tuple[Optional[str], Optional[str]]:
     """'experience[0].position' -> ('experience[0]', 'position'). None if unusable."""
     container, _, key = (path or "").strip().rpartition(".")
     if not container or not key or "[" in key:
         return None, None
     return container, key
-
 
 def _is_empty(r: Dict[str, Any]) -> bool:
     """Nothing worth confirming — a failed parse, or a first message that wasn't a resume."""
@@ -90,11 +84,9 @@ def _is_empty(r: Dict[str, Any]) -> bool:
         r.get("projects"),
     ))
 
-
 def _ask(r: Dict[str, Any], retried: bool) -> Dict[str, Any]:
     if retried:
                                                                                       
-                                   
         text = 'No problem — what should I change? For example: "the company is Globex, not Acme".'
         ui, options = "text", []
     else:
@@ -122,7 +114,6 @@ def _ask(r: Dict[str, Any], retried: bool) -> Dict[str, Any]:
         "import_confirmed": False,
     }
 
-
 def confirm_import(state: ResumeState) -> Dict[str, Any]:
     resume = state.get("master_profile") or {}
     r = resume.model_dump() if hasattr(resume, "model_dump") else resume
@@ -139,15 +130,12 @@ def confirm_import(state: ResumeState) -> Dict[str, Any]:
         logger.info("Asking the user to verify the imported profile.")
         return _ask(r, retried=False)
 
-                                              
     done = {"latest_answer": None, "current_question": None, "import_confirmed": True}
 
     if answer.strip() == CONFIRM_CHIP:
         logger.info("Import confirmed by chip.")
         return done
 
-                                                                                     
-                                                                              
     from app.utils.llm import get_openai_llm
 
     try:
@@ -200,7 +188,6 @@ def confirm_import(state: ResumeState) -> Dict[str, Any]:
 
     return done
 
-
 if __name__ == "__main__":
     profile = {
         "basics": {"name": "Priya Sharma", "email": "p@x.com"},
@@ -230,7 +217,6 @@ if __name__ == "__main__":
     assert _is_empty({}) and _is_empty({"basics": {"name": ""}, "experience": []})
     assert not _is_empty(profile)
 
-                                              
     asked = confirm_import({"master_profile": profile})
     assert asked["import_confirmed"] is False
     assert asked["current_question"]["section"] == "import"
@@ -240,13 +226,11 @@ if __name__ == "__main__":
 
     assert confirm_import({"master_profile": {}}) == {"import_confirmed": True}
 
-                                               
     retry = _ask(profile, retried=True)
     assert retry["current_question"]["question_text"] != asked["current_question"]["question_text"]
     assert retry["current_question"]["ui"] == "text", "asking what to fix needs free text"
     assert retry["current_question"]["retried"] is True
 
-                                                               
     tapped = confirm_import({
         "master_profile": profile,
         "latest_answer": CONFIRM_CHIP,
