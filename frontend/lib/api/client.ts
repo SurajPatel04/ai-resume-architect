@@ -15,11 +15,15 @@ export async function apiFetch<T>(
 ): Promise<T> {
   const url = `${API_BASE_URL}${path}`;
 
+  // FormData needs the browser to set Content-Type itself — it carries the
+  // multipart boundary, which we can't know here.
+  const isFormData = options.body instanceof FormData;
+
   const response = await fetch(url, {
     ...options,
     credentials: "include",
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...options.headers,
     },
   });

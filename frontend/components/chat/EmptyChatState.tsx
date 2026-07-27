@@ -1,41 +1,25 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { Upload, FileText, ArrowRight, Send } from "lucide-react";
+import { Upload, FileText, Send } from "lucide-react";
 
 interface EmptyChatStateProps {
   userName: string;
-  onUpload: (base64: string, filename: string) => void;
-  onCreateScratch: (data: any) => void;
+  onUpload: (file: File) => void;
+  onCreateScratch: () => void;
   onSendMessage: (msg: string) => void;
+  isUploading?: boolean;
 }
 
-export function EmptyChatState({ userName, onUpload, onCreateScratch, onSendMessage }: EmptyChatStateProps) {
-  const [mode, setMode] = useState<"options" | "scratch">("options");
+export function EmptyChatState({ userName, onUpload, onCreateScratch, onSendMessage, isUploading }: EmptyChatStateProps) {
   const [inputText, setInputText] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [formData, setFormData] = useState({
-    name: "",
-    email: "",
-    phone: "",
-    location: ""
-  });
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const base64 = event.target?.result as string;
-        onUpload(base64, file.name);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleScratchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    onCreateScratch(formData);
+    if (file) onUpload(file);
+    // Let the same file be picked again after a failed upload.
+    e.target.value = "";
   };
 
   return (
@@ -64,141 +48,78 @@ export function EmptyChatState({ userName, onUpload, onCreateScratch, onSendMess
         How would you like to start building your AI-architected resume today?
       </p>
 
-      {mode === "options" && (
-        <div className="w-full flex flex-col gap-8">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
-            {/* Upload Option */}
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="flex flex-col items-center p-6 rounded-2xl bg-neutral-900 border border-neutral-800 hover:bg-neutral-800 transition-colors group text-left relative overflow-hidden"
-            >
-              <div className="bg-neutral-800 p-3 rounded-xl mb-4 group-hover:scale-110 transition-transform">
-                <Upload className="text-white" size={24} />
-              </div>
-              <h3 className="text-lg font-semibold text-white mb-1">Upload Resume</h3>
-              <p className="text-sm text-neutral-500 text-center">Import an existing PDF to analyze and improve.</p>
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileChange}
-                accept=".pdf"
-                className="hidden"
-              />
-            </button>
-
-            {/* Create from Scratch Option */}
-            <button
-              onClick={() => setMode("scratch")}
-              className="flex flex-col items-center p-6 rounded-2xl bg-neutral-900 border border-neutral-800 hover:bg-neutral-800 transition-colors group text-left relative overflow-hidden"
-            >
-              <div className="bg-neutral-800 p-3 rounded-xl mb-4 group-hover:scale-110 transition-transform">
-                <FileText className="text-white" size={24} />
-              </div>
-              <h3 className="text-lg font-semibold text-white mb-1">Create from Scratch</h3>
-              <p className="text-sm text-neutral-500 text-center">Start fresh with AI guided sections.</p>
-            </button>
-          </div>
-
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-neutral-800"></div>
-            </div>
-            <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-black px-4 text-neutral-500">Or just start typing</span>
-            </div>
-          </div>
-          
-          <form 
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (inputText.trim()) {
-                onSendMessage(inputText);
-              }
-            }}
-            className="relative flex items-center w-full"
+      <div className="w-full flex flex-col gap-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
+          {/* Upload Option */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isUploading}
+            className="flex flex-col items-center p-6 rounded-2xl bg-neutral-900 border border-neutral-800 hover:bg-neutral-800 transition-colors group text-left relative overflow-hidden disabled:opacity-60"
           >
-            <input 
-              type="text"
-              value={inputText}
-              onChange={e => setInputText(e.target.value)}
-              placeholder="Message AI Resume Architect..."
-              className="w-full bg-neutral-900 border border-neutral-800 rounded-xl pl-4 pr-12 py-4 text-white focus:outline-none focus:border-neutral-700 shadow-xl"
+            <div className="bg-neutral-800 p-3 rounded-xl mb-4 group-hover:scale-110 transition-transform">
+              <Upload className="text-white" size={24} />
+            </div>
+            <h3 className="text-lg font-semibold text-white mb-1">
+              {isUploading ? "Uploading…" : "Upload Resume"}
+            </h3>
+            <p className="text-sm text-neutral-500 text-center">Import an existing PDF to analyze and improve.</p>
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              accept=".pdf"
+              className="hidden"
             />
-            <button 
-              type="submit"
-              disabled={!inputText.trim()}
-              className="absolute right-2 p-2 bg-white text-black rounded-lg disabled:opacity-50 disabled:bg-neutral-800 disabled:text-neutral-500 transition-colors"
-            >
-              <Send size={18} />
-            </button>
-          </form>
-        </div>
-      )}
+          </button>
 
-      {mode === "scratch" && (
-        <form onSubmit={handleScratchSubmit} className="w-full bg-neutral-900 border border-neutral-800 rounded-2xl p-6 text-left animate-in fade-in zoom-in-95 duration-200">
-          <h3 className="text-lg font-semibold text-white mb-4">Basic Information</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-            <div>
-              <label className="block text-xs font-medium text-neutral-400 mb-1">Full Name</label>
-              <input 
-                required
-                type="text" 
-                value={formData.name}
-                onChange={e => setFormData({...formData, name: e.target.value})}
-                className="w-full bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-neutral-600"
-                placeholder="John Doe"
-              />
+          {/* Create from Scratch Option. No form: the account already knows the
+                name and email, and the interview asks for everything else anyway. */}
+          <button
+            onClick={onCreateScratch}
+            className="flex flex-col items-center p-6 rounded-2xl bg-neutral-900 border border-neutral-800 hover:bg-neutral-800 transition-colors group text-left relative overflow-hidden"
+          >
+            <div className="bg-neutral-800 p-3 rounded-xl mb-4 group-hover:scale-110 transition-transform">
+              <FileText className="text-white" size={24} />
             </div>
-            <div>
-              <label className="block text-xs font-medium text-neutral-400 mb-1">Email</label>
-              <input 
-                required
-                type="email" 
-                value={formData.email}
-                onChange={e => setFormData({...formData, email: e.target.value})}
-                className="w-full bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-neutral-600"
-                placeholder="john@example.com"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-neutral-400 mb-1">Phone</label>
-              <input 
-                type="text" 
-                value={formData.phone}
-                onChange={e => setFormData({...formData, phone: e.target.value})}
-                className="w-full bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-neutral-600"
-                placeholder="+1 (555) 000-0000"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-neutral-400 mb-1">Location</label>
-              <input 
-                type="text" 
-                value={formData.location}
-                onChange={e => setFormData({...formData, location: e.target.value})}
-                className="w-full bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-neutral-600"
-                placeholder="City, State"
-              />
-            </div>
+            <h3 className="text-lg font-semibold text-white mb-1">Create from Scratch</h3>
+            <p className="text-sm text-neutral-500 text-center">Start fresh with AI guided sections.</p>
+          </button>
+        </div>
+
+        <div className="relative">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full border-t border-neutral-800"></div>
           </div>
-          <div className="flex items-center justify-between">
-            <button 
-              type="button" 
-              onClick={() => setMode("options")}
-              className="text-sm text-neutral-400 hover:text-white transition-colors"
-            >
-              Back
-            </button>
-            <button 
-              type="submit"
-              className="flex items-center gap-2 bg-white text-black px-4 py-2 rounded-lg text-sm font-semibold hover:bg-neutral-200 transition-colors"
-            >
-              Start Generating <ArrowRight size={16} />
-            </button>
+          <div className="relative flex justify-center text-xs uppercase">
+            <span className="bg-black px-4 text-neutral-500">Or just start typing</span>
           </div>
+        </div>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (inputText.trim()) {
+              onSendMessage(inputText);
+            }
+          }}
+          className="relative flex items-center w-full"
+        >
+          <input
+            type="text"
+            value={inputText}
+            onChange={e => setInputText(e.target.value)}
+            placeholder="Message AI Resume Architect..."
+            className="w-full bg-neutral-900 border border-neutral-800 rounded-xl pl-4 pr-12 py-4 text-white focus:outline-none focus:border-neutral-700 shadow-xl"
+          />
+          <button
+            type="submit"
+            disabled={!inputText.trim()}
+            className="absolute right-2 p-2 bg-white text-black rounded-lg disabled:opacity-50 disabled:bg-neutral-800 disabled:text-neutral-500 transition-colors"
+          >
+            <Send size={18} />
+          </button>
         </form>
-      )}
+      </div>
     </div>
   );
 }
