@@ -6,6 +6,9 @@ import { cn } from "@/lib/utils";
 import type { ResumeSnapshot } from "@/hooks/useChat";
 import type {
     Resume,
+    ResumeCertification,
+    ResumeCustomEntry,
+    ResumeCustomSection,
     ResumeEducation,
     ResumeExperience,
     ResumeProject,
@@ -32,7 +35,9 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 /** One resume bullet, lit up while the chat is asking about that exact line. */
-function Bullet({ focused, children }: { focused: boolean; children: React.ReactNode }) {
+// `focused` is optional: the chat only ever points at a bullet inside a section it can
+// name by path, and a custom section has no path for it to name.
+function Bullet({ focused = false, children }: { focused?: boolean; children: React.ReactNode }) {
     return (
         <li
             className={cn(
@@ -161,11 +166,15 @@ function LiveResume({ profile, focus }: { profile: Resume; focus?: ResumeSnapsho
     const education = profile.education || [];
     const projects = profile.projects || [];
     const skills = profile.skills || [];
+    const certifications = profile.certifications || [];
+    // Sections the schema does not model — Volunteering, Awards — kept off the panel
+    // until now, so a resume that had them looked like it had lost them.
+    const custom = (profile.custom_sections || []).filter(s => (s.entries || []).length);
     const summary = profile.summary?.content;
 
     const isEmpty =
         !basics.name && !summary && !experience.length && !education.length &&
-        !projects.length && !skills.length;
+        !projects.length && !skills.length && !certifications.length && !custom.length;
 
     if (isEmpty) {
         return (
@@ -218,6 +227,12 @@ function LiveResume({ profile, focus }: { profile: Resume; focus?: ResumeSnapsho
                     {projects.map((proj: ResumeProject, i: number) => (
                         <div key={i} className={cn("mb-3", focused("projects", i) && FOCUS_ENTRY)}>
                             <p className="text-xs font-semibold text-neutral-200">{proj.name || "Project"}</p>
+                            {/* A project whose content sits in `description` rather than in
+                  highlights showed as a bare title, which read as lost work. */}
+                            {proj.description && (
+                                <p className="mt-0.5 text-[11px] leading-relaxed text-neutral-400">{proj.description}</p>
+                            )}
+                            {proj.url && <p className="text-[11px] text-neutral-600">{proj.url}</p>}
                             <ul className="mt-1 list-disc pl-4 text-[11px] leading-relaxed text-neutral-400 marker:text-neutral-700">
                                 {(proj.highlights || []).map((hl: string, j: number) => (
                                     <Bullet key={j} focused={focused("projects", i) && bullet === j}>{hl}</Bullet>
@@ -264,6 +279,39 @@ function LiveResume({ profile, focus }: { profile: Resume; focus?: ResumeSnapsho
                     ))}
                 </Section>
             )}
+
+            {certifications.length > 0 && (
+                <Section title="Certifications">
+                    {certifications.map((cert: ResumeCertification, i: number) => (
+                        <div key={i} className={cn("mb-2", focused("certifications", i) && FOCUS_ENTRY)}>
+                            <p className="text-xs font-semibold text-neutral-200">{cert.name}</p>
+                            <p className="text-[11px] text-neutral-500">
+                                {[cert.issuer, cert.date].filter(Boolean).join(" · ")}
+                            </p>
+                        </div>
+                    ))}
+                </Section>
+            )}
+
+            {custom.map((section: ResumeCustomSection, s: number) => (
+                <Section key={s} title={section.name || "Other"}>
+                    {(section.entries || []).map((entry: ResumeCustomEntry, i: number) => (
+                        <div key={i} className="mb-3">
+                            <p className="text-xs font-semibold text-neutral-200">{entry.title}</p>
+                            <p className="text-[11px] text-neutral-500">
+                                {[entry.subtitle, entry.date].filter(Boolean).join(" · ")}
+                            </p>
+                            {!!(entry.highlights || []).length && (
+                                <ul className="mt-1 list-disc pl-4 text-[11px] leading-relaxed text-neutral-400 marker:text-neutral-700">
+                                    {(entry.highlights || []).map((hl: string, j: number) => (
+                                        <Bullet key={j}>{hl}</Bullet>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+                    ))}
+                </Section>
+            ))}
         </div>
     );
 }

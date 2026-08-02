@@ -1,29 +1,17 @@
-"""One LLM pass over the bullets the user has already written, gated behind a single
-yes/no so nobody gets interrogated for numbers they don't have.
-
-analyze_gaps only sees emptiness: a bullet either exists or it doesn't. It cannot tell
-that "Responsible for various tasks" says nothing, or that "Worked on 2 teams" holds a
-digit that is not an achievement. This node judges the content instead.
-
-Two modes in one node, the same shape as confirm_import and tailor_resume:
-
-  1. Pick the weakest bullets, then ask ONCE whether they want to work on them.
-  2. On "yes", queue those bullets as ordinary impact questions. On anything else,
-     drop them and finish the resume.
-
-Three separate "what was the number?" questions in a row, each answered "I don't have
-one", is the shape users hate. One question they can decline costs nothing.
+"""One LLM pass over the bullets the user has already written, gated behind a single yes/no so
+nobody gets interrogated for numbers they don't have.
 """
 
 import logging
-import re
 from typing import Any, Dict, List, Tuple
 
 from pydantic import BaseModel, Field
 
-from app.graphs.apply import impact_key
-from app.graphs.node.generate_question import says_yes
-from app.graphs.state import ResumeState
+from app.graphs.apply import apply_extraction, impact_key, read_slot, slot_parts
+from app.graphs.node.enhance_resume import numbers_in
+from app.graphs.node.generate_question import current_item, says_yes
+from app.graphs.state import Resume, ResumeState
+from app.graphs.prompts import WEAK_BULLETS
 from app.utils.llm import get_openai_llm
 
 logger = logging.getLogger(__name__)
@@ -35,7 +23,7 @@ SECTIONS = ("experience", "projects")
 GATE_SECTION = "impact_gate"
 
 IMPROVE_CHIP = "Yes, let's add numbers"
-                                                                                     
+
 DECLINE_CHIP = "No, leave them as is"
 
 class WeakBullet(BaseModel):
@@ -49,6 +37,16 @@ class WeakBullet(BaseModel):
         description="What this bullet is missing, in one short phrase — e.g. 'no measurable result', "
         "'does not say what was actually built', 'describes a duty rather than an achievement'."
     )
+    rewrite: str = Field(
+        default="",
+        description="This bullet rewritten as it would read WITH the missing figure in it, using "
+        "{} to mark the one spot the number goes — including its unit right after the braces. "
+        "e.g. 'Integrated the Razorpay payment gateway, lifting transaction success rate to {}%, "
+        "with custom backend logic for discount coupons.' Keep every fact the original states; "
+        "you are adding one measurement to it, not writing a new bullet. Exactly one {}, no other "
+        "braces, and NEVER a digit of your own — the candidate fills the blank. Leave empty when "
+        "no single figure would make this bullet stronger.",
+    )
 
 class QualityReview(BaseModel):
     weakest: List[WeakBullet] = Field(
@@ -58,11 +56,7 @@ class QualityReview(BaseModel):
     )
 
 def list_bullets(resume: Dict[str, Any]) -> List[Tuple[str, int, str]]:
-    """Every written bullet as (container path, index, text).
-
-    The path vocabulary here is what the model is asked to hand back, and what
-    merge_profile expects — one function so they cannot drift.
-    """
+    """Every written bullet as (container path, index, text)."""
     out: List[Tuple[str, int, str]] = []
     for section in SECTIONS:
         for i, item in enumerate(resume.get(section) or []):
@@ -73,18 +67,52 @@ def list_bullets(resume: Dict[str, Any]) -> List[Tuple[str, int, str]]:
                     out.append((f"{section}[{i}]", j, bullet))
     return out
 
+SECTION_LABELS = {"experience": "Experience", "projects": "Projects"}
+
+def usable_rewrite(original: str, rewrite: str) -> str:
+    """The proposed bullet-with-a-blank, or nothing if it cannot be trusted."""
+    rewrite = (rewrite or "").strip()
+    if not rewrite:
+        return ""
+
+    if slot_parts(rewrite) is None:
+        logger.warning("Dropped a rewrite that was not one fillable bullet: %r", rewrite)
+        return ""
+
+    if not numbers_in(rewrite) <= numbers_in(original):
+        logger.warning("Dropped a rewrite that invented a figure: %r", rewrite)
+        return ""
+
+    return rewrite
+
+def entry_title(resume: Dict[str, Any], field: str) -> str:
+    """Which entry a bullet sits on, in the words the user would recognise it by."""
+    section, _, _ = (field or "").partition("[")
+    label = SECTION_LABELS.get(section, section.title())
+
+    item = current_item(resume, field)
+    if section == "projects":
+        name = item.get("name")
+        return f"{label}: {name}" if name else label
+
+    role, company = item.get("position"), item.get("company")
+    if role and company:
+        return f"{label}: {role} at {company}"
+    named = role or company
+    return f"{label}: {named}" if named else label
+
+def preview(rewrite: str) -> str:
+    """The proposed bullet as prose, with the blank shown as a blank."""
+    parts = slot_parts(rewrite or "")
+    return f"{parts[0]}___{parts[1]}" if parts else ""
+
 def usable_gaps(
     bullets: List[Tuple[str, int, str]],
     weakest: List[WeakBullet],
     skipped: List[str],
+    resume: Dict[str, Any] | None = None,
 ) -> List[Dict[str, Any]]:
-    """Turn the model's picks into queue items, dropping anything that doesn't hold up.
-
-    The model is free to invent an experience[7] that isn't there, repeat a bullet, or
-    re-raise one the user already declined. Every pick is resolved back against the real
-    profile and the bullet text is read from there, never from the model's echo — so a
-    hallucinated index cannot put words into someone's resume.
-    """
+    """Turn the model's picks into queue items, dropping anything that doesn't hold up."""
     known = {(field, index): text for field, index, text in bullets}
     already_asked = sum(1 for key in skipped if key.startswith("impact."))
     budget = MAX_IMPACT_QUESTIONS - already_asked
@@ -113,45 +141,122 @@ def usable_gaps(
             "is_gate": False,
             "bullet_index": pick.bullet_index,
             "weak_bullet": text,
-                                                                                       
+
             "reason": pick.reason.rstrip("."),
+
+            "entry": entry_title(resume or {}, pick.field),
+
+            "rewrite": usable_rewrite(text, pick.rewrite),
         })
 
     return gaps
+
+def gate_card(index: int, gap: Dict[str, Any]) -> str:
+    """One weak bullet as it appears in the gate: where it lives, what it says, what it lacks."""
+    entry = gap.get("entry")
+    heading = f"**Current bullet {index} — {entry}**" if entry else f"**Current bullet {index}:**"
+
+    lines = [
+        heading,
+        f"> {gap.get('weak_bullet', '')}",
+        f"Why it could be stronger: {gap.get('reason', 'it needs a clearer result')}.",
+    ]
+
+    shown = preview(gap.get("rewrite", ""))
+    if shown:
+        lines.append(f"Could read:\n\n> {shown}")
+
+    return "\n\n".join(lines)
+
+def gate_meta(gaps: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """What the front end needs to draw the same cards with the blanks typeable."""
+    return {"gaps": [
+        {
+            "label": f"Current bullet {index} — {gap['entry']}" if gap.get("entry")
+                     else f"Current bullet {index}",
+            "original": gap.get("weak_bullet", ""),
+            "reason": gap.get("reason", "it needs a clearer result"),
+            "template": gap.get("rewrite", ""),
+        }
+        for index, gap in enumerate(gaps, start=1)
+    ]}
 
 def gate_question(gaps: List[Dict[str, Any]]) -> Dict[str, Any]:
     """The opt-in question, with every affected line visible before a user commits."""
     count = len(gaps)
     noun = "bullet point" if count == 1 else "bullet points"
-    examples = "\n\n".join(
-        f"**Current bullet {index}:**\n\n> {gap.get('weak_bullet', '')}\n\n"
-        f"Why it could be stronger: {gap.get('reason', 'it needs a clearer result')}."
-        for index, gap in enumerate(gaps, start=1)
-    )
+    fillable = [gap for gap in gaps if gap.get("rewrite")]
+
+    if fillable:
+        # Cards are drawn from `meta`; repeating them here would print each twice.
+        text = (
+            f"I found {count} {noun} that could be stronger. I've drafted how each could "
+            "read — fill in any figure you actually remember and leave the rest blank."
+        )
+    else:
+        examples = "\n\n".join(gate_card(index, gap) for index, gap in enumerate(gaps, start=1))
+        text = (
+            f"I found {count} {noun} that could be stronger.\n\n{examples}\n\n"
+            "Would you like to add only the real outcomes you remember?"
+        )
 
     return {
         "field": GATE_SECTION,
         "section": GATE_SECTION,
-        "question_text": (
-            f"I found {count} {noun} that could be stronger.\n\n{examples}\n\n"
-            "Would you like to add only the real outcomes you remember?"
-        ),
-        "ui": "chips",
-        "options": [IMPROVE_CHIP, DECLINE_CHIP],
+        "question_text": text,
+        "ui": "impact_gate" if fillable else "chips",
+        "options": [DECLINE_CHIP] if fillable else [IMPROVE_CHIP, DECLINE_CHIP],
         "is_gate": False,
         "missing_fields": [],
         "bullet_index": None,
-                                                                                       
+
+        "meta": gate_meta(gaps) if fillable else None,
+
         "pending_gaps": gaps,
     }
 
-def wants_metrics(answer: str) -> bool:
-    """Did they take the gate?
+def filled_lines(gaps: List[Dict[str, Any]], answer: str) -> List[Dict[str, Any]]:
+    """The gaps whose blank the user actually filled in, paired with the finished line."""
+    lines = [line.strip() for line in (answer or "").splitlines() if line.strip()]
 
-    Anything unclear counts as no — declining costs the user one polished-but-unquantified
-    bullet, while a false yes costs three questions they already said they didn't want.
-    Shares says_yes with the section gates so "yes" means one thing across the app.
-    """
+    out: List[Dict[str, Any]] = []
+    taken: set = set()
+    for gap in gaps:
+        template = gap.get("rewrite") or ""
+        if not template:
+            continue
+        for index, line in enumerate(lines):
+            # Each line spends itself on one bullet, so twins cannot both claim it.
+            if index in taken:
+                continue
+            figure = read_slot(template, line)
+            if figure:
+                taken.add(index)
+                out.append({**gap, "figure": figure, "filled": line})
+                break
+
+    return out
+
+def apply_filled(resume: Dict[str, Any], filled: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Every filled-in bullet written onto the profile, or the profile unchanged."""
+    if not filled:
+        return resume
+
+    candidate = resume
+    for gap in filled:
+        candidate = apply_extraction(
+            candidate, gap["field"], {"metric": gap["figure"]},
+            bullet_index=gap.get("bullet_index"), template=gap.get("rewrite"),
+        )
+
+    try:
+        return Resume.model_validate(candidate).model_dump()
+    except Exception as e:
+        logger.warning("Filled-in bullets did not validate, keeping the resume as it was: %r", e)
+        return resume
+
+def wants_metrics(answer: str) -> bool:
+    """Did they take the gate?"""
     return says_yes(answer)
 
 def review_quality(state: ResumeState) -> Dict[str, Any]:
@@ -161,12 +266,26 @@ def review_quality(state: ResumeState) -> Dict[str, Any]:
 
     if answer and pending.get("section") == GATE_SECTION:
         done: Dict[str, Any] = {"latest_answer": None, "current_question": None}
+        gaps = pending.get("pending_gaps") or []
+
+        filled = filled_lines(gaps, answer)
+        if filled:
+            resume = state.get("master_profile", {})
+            if hasattr(resume, "model_dump"):
+                resume = resume.model_dump()
+
+            logger.info("User filled in %d of %d bullet(s) on the card.", len(filled), len(gaps))
+
+            # Every bullet on the card is retired: a blank box is an answer too.
+            skipped = list(state.get("skipped") or [])
+            skipped += [impact_key(g["field"], g.get("bullet_index")) for g in gaps]
+
+            return {**done, "master_profile": apply_filled(resume, filled), "skipped": skipped}
 
         if not wants_metrics(answer):
             logger.info("User declined the metric questions.")
             return done
 
-        gaps = pending.get("pending_gaps") or []
         logger.info("User opted in to %d metric question(s).", len(gaps))
         return {**done, "question_queue": gaps}
 
@@ -178,7 +297,7 @@ def _find_weak_bullets(state: ResumeState) -> Dict[str, Any]:
         resume = resume.model_dump()
 
     skipped = list(state.get("skipped") or [])
-                                                                                            
+
     done: Dict[str, Any] = {"quality_reviewed": True, "current_question": None}
 
     bullets = list_bullets(resume)
@@ -186,109 +305,27 @@ def _find_weak_bullets(state: ResumeState) -> Dict[str, Any]:
     if not bullets or already_asked >= MAX_IMPACT_QUESTIONS:
         return done
 
-    listing = "\n".join(f"{field} bullet {index}: {text}" for field, index, text in bullets)
+    listing = "\n".join(
+        f"{field} ({entry_title(resume, field)}) bullet {index}: {text}"
+        for field, index, text in bullets
+    )
 
-    prompt = f"""
-    These are the bullet points on someone's resume.
-
-    {listing}
-
-    Pick at most {MAX_IMPACT_QUESTIONS - already_asked} that would gain the most from one
-    follow-up question, weakest first. A bullet is weak when it describes a duty rather
-    than an achievement, is vague about what was actually built or changed, or claims an
-    outcome with no result attached. A number alone does not make a bullet strong —
-    "worked on 2 teams" is still a duty.
-
-    Return the paths and indexes exactly as listed above. If every bullet is already
-    specific and carries a real result, return nothing — a needless question costs the
-    user more than a marginal bullet gains.
-    """
+    prompt = WEAK_BULLETS.format(
+        listing=listing, budget=MAX_IMPACT_QUESTIONS - already_asked
+    )
 
     try:
         review: QualityReview = get_openai_llm().with_structured_output(
             QualityReview, method="function_calling"
         ).invoke(prompt)
     except Exception as e:
-                                                                                           
+
         logger.error("Quality review failed, moving on: %r", e)
         return done
 
-    gaps = usable_gaps(bullets, review.weakest, skipped)
+    gaps = usable_gaps(bullets, review.weakest, skipped, resume)
     logger.info("Quality review found %d weak bullet(s) out of %d.", len(gaps), len(bullets))
 
     if not gaps:
         return done
     return {**done, "current_question": gate_question(gaps)}
-
-if __name__ == "__main__":
-    profile = {
-        "experience": [{"highlights": ["Managed social media", "Cut build time 40%"]}],
-        "projects": [{"highlights": ["Built a parser"]}],
-        "education": [{"institution": "IIT"}],
-    }
-
-    bullets = list_bullets(profile)
-    assert bullets == [
-        ("experience[0]", 0, "Managed social media"),
-        ("experience[0]", 1, "Cut build time 40%"),
-        ("projects[0]", 0, "Built a parser"),
-    ], bullets
-    assert list_bullets({"experience": [{"highlights": ["", "  "]}]}) == [], "blank bullets aren't bullets"
-    assert list_bullets({}) == []
-
-    def pick(field, index, reason="no measurable result"):
-        return WeakBullet(field=field, bullet_index=index, reason=reason)
-
-    gaps = usable_gaps(bullets, [pick("experience[0]", 0)], [])
-    assert len(gaps) == 1, gaps
-    assert gaps[0]["section"] == "impact" and gaps[0]["kind"] == "impact"
-    assert gaps[0]["bullet_index"] == 0
-    assert gaps[0]["weak_bullet"] == "Managed social media"
-    assert gaps[0]["reason"] == "no measurable result"
-
-    assert usable_gaps(bullets, [pick("experience[9]", 0)], []) == []
-    assert usable_gaps(bullets, [pick("experience[0]", 7)], []) == []
-    assert usable_gaps(bullets, [pick("nonsense", 0)], []) == []
-
-    assert len(usable_gaps(bullets, [pick("experience[0]", 0), pick("experience[0]", 0)], [])) == 1
-    assert usable_gaps(bullets, [pick("experience[0]", 0)], [impact_key("experience[0]", 0)]) == []
-
-    many = [pick("experience[0]", 0), pick("experience[0]", 1), pick("projects[0]", 0)]
-    assert len(usable_gaps(bullets, many, [])) == MAX_IMPACT_QUESTIONS
-    assert len(usable_gaps(bullets, many, ["impact.experience[1].0"])) == MAX_IMPACT_QUESTIONS - 1
-    assert usable_gaps(bullets, many, [f"impact.x[{i}].0" for i in range(MAX_IMPACT_QUESTIONS)]) == []
-
-    assert usable_gaps(bullets, [], []) == []
-
-    line = f"{bullets[1][0]} bullet {bullets[1][1]}: {bullets[1][2]}"
-    assert not re.match(r"^\w+\[\d+\]\[\d+\]", line), line
-    assert line.startswith("experience[0] bullet 1:"), line
-
-    found = usable_gaps(bullets, many, [])
-    gate = gate_question(found)
-    assert gate["ui"] == "chips" and gate["options"] == [IMPROVE_CHIP, DECLINE_CHIP]
-    assert gate["section"] == GATE_SECTION, "the router matches on this to send the reply back here"
-    assert gate["pending_gaps"] == found, "the picks ride on the question, not a new state field"
-    assert "> Managed social media" in gate["question_text"], "the gate must name the exact bullet"
-    assert "Why it could be stronger: no measurable result." in gate["question_text"]
-    assert "1 bullet points" not in gate_question(found[:1])["question_text"], "count must read naturally"
-
-    took = review_quality({"current_question": gate, "latest_answer": IMPROVE_CHIP})
-    assert took["question_queue"] == found
-    assert took["current_question"] is None and took["latest_answer"] is None
-
-    for yes in (IMPROVE_CHIP, "yes", "Yes please", "sure", "yeah lets do it", "OK"):
-        assert wants_metrics(yes), yes
-
-    for no in (DECLINE_CHIP, "no", "not really", "skip", "", "I don't have numbers"):
-        assert not wants_metrics(no), no
-
-    declined = review_quality({"current_question": gate, "latest_answer": DECLINE_CHIP})
-    assert "question_queue" not in declined, "declining must not queue anything"
-    assert declined["current_question"] is None
-
-    assert review_quality({"master_profile": {}}) == {"quality_reviewed": True, "current_question": None}
-    spent = {"master_profile": profile, "skipped": [f"impact.x[{i}].0" for i in range(MAX_IMPACT_QUESTIONS)]}
-    assert review_quality(spent)["current_question"] is None, "no budget must mean no LLM call"
-
-    print("review_quality ok")

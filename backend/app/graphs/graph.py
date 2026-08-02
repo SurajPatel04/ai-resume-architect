@@ -1,6 +1,5 @@
 import logging
 from langgraph.graph import StateGraph, END, START
-from typing import Any, Dict
 
 from app.graphs.state import ResumeState
 from app.graphs.node.planner import planner
@@ -8,6 +7,7 @@ from app.graphs.node.apply_edit import apply_edit
 from app.graphs.node.tailor_resume import tailor_resume
 from app.graphs.node.parse_document import parse_document
 from app.graphs.node.confirm_import import confirm_import
+from app.graphs.node.add_content import ADD_SECTION, add_content
 from app.graphs.node.analyze_gaps import analyze_gaps
 from app.graphs.node.career_setup import CAREER_SECTION, ROLE_SECTION, career_setup
 from app.graphs.node.conversation_planner import conversation_planner
@@ -19,7 +19,8 @@ from app.graphs.node.process_verification import process_verification
 from app.graphs.node.validate_entities import validate_entities
 from app.graphs.node.merge_profile import merge_profile
 from app.graphs.node.enhance_resume import enhance_resume
-from app.graphs.node.render_resume import render_resume
+from app.graphs.node.render_resume import FIT_SECTION, render_resume
+from app.graphs.node.choose_style import STYLE_SECTION, choose_style
 from app.graphs.node.score_ats import score_ats
 from app.graphs.node.score_resume_quality import score_resume_quality
 from app.graphs.node.skill_gap import skill_gap
@@ -28,30 +29,51 @@ from app.graphs.node.add_extras import add_extras
 logger = logging.getLogger(__name__)
 
 def route_start(state: ResumeState) -> str:
+    """Router to determine if we need planning or if we are in the middle of a collection
+    turn.
     """
-    Router to determine if we need planning or if we are in the middle of a collection turn.
-    """
-                                                                                           
+
     if state.get("uploaded_text") or state.get("uploaded_file"):
         return "parse_document"
-        
+
     if state.get("latest_answer"):
         return "planner"
-        
+
     return "analyze_gaps"
 
 def route_planner(state: ResumeState) -> str:
-    """
-    Router after planner node decides the workflow_type.
-    """
+    """Router after planner node decides the workflow_type."""
     workflow_type = state.get("workflow_type")
     current_question = state.get("current_question") or {}
 
     if current_question.get("section") == "import":
         return "confirm_import"
-                                                                                     
+
+    # Checked ahead of workflow_type: the reply names a section, not an edit.
+    if current_question.get("section") == FIT_SECTION:
+        return "render_resume"
+
+    # Likewise: a layout answer reads like a request to rewrite the resume.
+    if current_question.get("section") == STYLE_SECTION:
+        return "choose_style"
+
     if current_question.get("field") == "awaiting_jd":
         return "tailor_resume"
+
+    # Ahead of the gate sections below: a message carrying a whole new entry is not an
+    # answer to whatever happened to be on screen, and the gate that owns the question
+    # has nowhere to put it.
+    if workflow_type == "ADD_CONTENT":
+        return "add_content"
+
+    # Changing their mind about the layout, at any point after they first chose.
+    if workflow_type == "RESTYLE":
+        return "choose_style"
+
+    # Answering "you already have this — add it anyway?" goes back to the node holding
+    # the paste, whatever the classifier made of a chip about a duplicate.
+    if current_question.get("section") == ADD_SECTION:
+        return "add_content"
 
     if workflow_type == "TAILOR_RESUME":
         return "tailor_resume"
@@ -83,27 +105,21 @@ def route_planner(state: ResumeState) -> str:
 
 def route_verification(state: ResumeState) -> str:
     extracted = state.get("extracted_entities", {})
-                                                                                     
+
     if extracted.get("is_skip") or "items" in extracted or "extracted_values" in extracted:
         return "validate_entities"
     return END
 
 def route_after_validation(state: ResumeState) -> str:
-    """
-    If validation fails or user skips, skip merging and go to analyze_gaps.
-    Otherwise, merge.
+    """If validation fails or user skips, skip merging and go to analyze_gaps. Otherwise,
+    merge.
     """
     if state.get("validation_errors") or state.get("extracted_entities", {}).get("is_skip"):
         return "analyze_gaps"
     return "merge_profile"
 
 def nothing_left_to_ask(state: ResumeState) -> str:
-    """Where to go once the question queue is empty.
-
-    Two one-shot gates stand between a filled-in profile and the finished PDF: read the
-    bullets that exist, then offer the sections nothing else can reach. Shared by both
-    routers that can drain the queue, so they cannot disagree about the order.
-    """
+    """Where to go once the question queue is empty."""
     if not state.get("quality_reviewed"):
         return "review_quality"
 
@@ -113,10 +129,9 @@ def nothing_left_to_ask(state: ResumeState) -> str:
     return "enhance_resume"
 
 def route_after_gaps(state: ResumeState) -> str:
-    """
-    Router that decides where to go after analyze_gaps.
-    If there are items in the question_queue, let the planner choose between them.
-    Otherwise the factual gaps are filled, and the two closing gates get their turn.
+    """Router that decides where to go after analyze_gaps. If there are items in the
+    question_queue, let the planner choose between them. Otherwise the factual gaps are
+    filled, and the two closing gates get their turn.
     """
     if state.get("question_queue"):
         return "conversation_planner"
@@ -159,6 +174,7 @@ workflow.add_node("career_setup", career_setup)
 workflow.add_node("add_extras", add_extras)
 workflow.add_node("parse_document", parse_document)
 workflow.add_node("confirm_import", confirm_import)
+workflow.add_node("add_content", add_content)
 workflow.add_node("analyze_gaps", analyze_gaps)
 workflow.add_node("conversation_planner", conversation_planner)
 workflow.add_node("review_quality", review_quality)
@@ -169,6 +185,7 @@ workflow.add_node("process_verification", process_verification)
 workflow.add_node("validate_entities", validate_entities)
 workflow.add_node("merge_profile", merge_profile)
 workflow.add_node("enhance_resume", enhance_resume)
+workflow.add_node("choose_style", choose_style)
 workflow.add_node("render_resume", render_resume)
 
 workflow.add_conditional_edges(START, route_start, {
@@ -179,6 +196,9 @@ workflow.add_conditional_edges(START, route_start, {
 
 workflow.add_conditional_edges("planner", route_planner, {
     "tailor_resume": "tailor_resume",
+    "render_resume": "render_resume",
+    "choose_style": "choose_style",
+    "add_content": "add_content",
     "apply_edit": "apply_edit",
     "confirm_import": "confirm_import",
     "review_quality": "review_quality",
@@ -212,11 +232,7 @@ workflow.add_conditional_edges("tailor_resume", route_tailor_resume, {
     END: END
 })
 def route_after_scoring(state: ResumeState) -> str:
-    """One shot at the keywords the job wants and the resume doesn't have.
-
-    skill_gap_asked is what breaks the cycle: answering re-scores, and re-scoring comes
-    straight back through here.
-    """
+    """One shot at the keywords the job wants and the resume doesn't have."""
     if state.get("skill_gap_asked"):
         return "score_resume_quality"
 
@@ -249,9 +265,34 @@ workflow.add_edge("parse_document", "confirm_import")
 def route_confirm_import(state: ResumeState) -> str:
     if state.get("import_confirmed"):
         return "analyze_gaps"
-    return END                                     
+    return END
 
 workflow.add_conditional_edges("confirm_import", route_confirm_import, {
+    "analyze_gaps": "analyze_gaps",
+    END: END,
+})
+
+def route_after_add_content(state: ResumeState) -> str:
+    """Extract from what they pasted, wait on a question, or drop through.
+
+    Two very different things arrive here as `current_question`. The standalone one is
+    synthetic — nobody sees it, it exists to tell extract_entities which schema to parse
+    the paste into. The duplicate question is a real one with chips on it, and running
+    on past that both spends an extraction on a question about a button and puts a
+    second question on screen underneath the first.
+    """
+    question = state.get("current_question") or {}
+
+    if question.get("standalone"):
+        return "extract_entities"
+
+    if question:
+        return END
+
+    return "analyze_gaps"
+
+workflow.add_conditional_edges("add_content", route_after_add_content, {
+    "extract_entities": "extract_entities",
     "analyze_gaps": "analyze_gaps",
     END: END,
 })
@@ -300,5 +341,17 @@ workflow.add_conditional_edges("conversation_planner", route_after_planning, {
 workflow.add_edge("generate_question", END)
 
 workflow.add_edge("enhance_resume", "score_resume_quality")
-workflow.add_edge("score_resume_quality", "render_resume")
+workflow.add_edge("score_resume_quality", "choose_style")
+
+def route_after_style(state: ResumeState) -> str:
+    """Waiting on an answer about the layout, or ready to build the PDF."""
+    if (state.get("current_question") or {}).get("section") == STYLE_SECTION:
+        return END
+
+    return "render_resume"
+
+workflow.add_conditional_edges("choose_style", route_after_style, {
+    "render_resume": "render_resume",
+    END: END,
+})
 workflow.add_edge("render_resume", END)

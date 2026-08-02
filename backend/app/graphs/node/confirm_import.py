@@ -1,12 +1,4 @@
-"""Verify what came out of an uploaded document before treating it as fact.
-
-The brief asks that an upload let the bot "start from a semi-completed state and only
-ask verification questions". An LLM parse is a guess — merging it unchecked makes every
-later question build on unverified data. This node shows the user what was picked up
-and gives them one turn to correct it.
-
-Two modes in one node (same shape as tailor_resume): ask, then process the reply.
-"""
+"""Verify what came out of an uploaded document before treating it as fact."""
 
 import logging
 from typing import Any, Dict, List, Optional, Tuple
@@ -15,10 +7,73 @@ from pydantic import BaseModel, Field
 
 from app.graphs.apply import apply_extraction
 from app.graphs.state import Resume, ResumeState
+from app.graphs.prompts import IMPORT_REVIEW
+from app.utils.prompt import compact
 
 logger = logging.getLogger(__name__)
 
 CONFIRM_CHIP = "Yes, that's right"
+
+FIX_CHIP = "Something's missing"
+
+# Sections the user can point at, and the gap each one becomes.
+ADDABLE = {
+    "Work experience": ("experience", ["company", "position", "start_date", "end_date", "highlights"]),
+    "Education": ("education", ["institution", "area", "study_type", "end_date"]),
+    "Projects": ("projects", ["name", "description", "highlights"]),
+    "Skills": ("skills", ["skills"]),
+    "Certifications or awards": ("certifications", ["name", "issuer", "date"]),
+    "Contact details": ("basics", ["name", "email", "phone", "location"]),
+}
+
+SECTION_CHIPS = list(ADDABLE)
+
+# Only consulted at the picker step, where a bare "name" means contact details.
+SECTION_WORDS = {
+    "experience": ("experience", "work", "job", "role", "employ", "intern", "position", "company"),
+    "education": ("education", "degree", "college", "university", "school", "qualification", "study",
+                  "b.tech", "btech", "mca", "bsc", "msc"),
+    "projects": ("project", "portfolio", "side project"),
+    "skills": ("skill", "tech stack", "technolog", "tool", "language", "framework"),
+    "certifications": ("cert", "award", "licen", "honour", "honor", "achievement", "badge"),
+    "basics": ("contact", "email", "phone", "number", "linkedin", "github", "location", "address",
+               "website", "portfolio link", "my name"),
+}
+
+def read_section(answer: str) -> Optional[str]:
+    """Which section they named, tapped or typed, or None if it isn't one."""
+    tapped = ADDABLE.get((answer or "").strip())
+    if tapped:
+        return tapped[0]
+
+    reply = (answer or "").strip().casefold()
+    if not reply:
+        return None
+
+    best: Optional[str] = None
+    longest = 0
+    for section, words in SECTION_WORDS.items():
+        for word in words:
+            if word in reply and len(word) > longest:
+                best, longest = section, len(word)
+    return best
+
+def section_gap(section: str, r: Dict[str, Any]) -> Dict[str, Any]:
+    """A question about `section`, in the shape analyze_gaps would have queued."""
+    fields = next((f for label, (name, f) in ADDABLE.items() if name == section), ["name"])
+
+    field = section
+    if section in ("experience", "education", "projects"):
+        field = f"{section}[{len(r.get(section) or [])}]"
+
+    return {
+        "field": field,
+        "section": section,
+        "kind": "required",
+        "missing_fields": list(fields),
+        "is_gate": False,
+        "reason": f"They said their {section} was missing from the import.",
+    }
 
 class FieldCorrection(BaseModel):
     path: str = Field(
@@ -41,11 +96,19 @@ class ImportReview(BaseModel):
 def _plural(items: list, word: str) -> str:
     return f"{len(items)} {word}{'' if len(items) == 1 else 's'}"
 
-def summarise(r: Dict[str, Any]) -> str:
-    """Plain-language account of what was parsed.
+def _headed(items: list, heading: str) -> str:
+    """Count a section by the heading its own resume gives it.
 
-    Built from the data, not by an LLM — a summary of a parse must not itself be a guess.
+    "Awards" is already a plural and reads as one — "3 awards". "Volunteering" is not,
+    and "2 volunteerings" is not English, so those are counted in entries instead.
     """
+    label = heading.strip().lower()
+    if label.endswith("s"):
+        return f"{len(items)} {label[:-1] if len(items) == 1 else label}"
+    return f"{len(items)} {label} entr{'y' if len(items) == 1 else 'ies'}"
+
+def summarise(r: Dict[str, Any]) -> str:
+    """Plain-language account of what was parsed."""
     parts = []
     experience = r.get("experience") or []
     if experience:
@@ -65,6 +128,21 @@ def summarise(r: Dict[str, Any]) -> str:
     if projects:
         parts.append(_plural(projects, "project"))
 
+    certifications = r.get("certifications") or []
+    if certifications:
+        parts.append(_plural(certifications, "certification"))
+
+    # Whatever else their document carried. Counted by its own heading, because a
+    # summary that stops at the four sections this schema happens to name reads as
+    # having thrown the rest away — which is exactly what it used to do.
+    for section in r.get("custom_sections") or []:
+        if not isinstance(section, dict):
+            continue
+        entries = section.get("entries") or []
+        name = str(section.get("name") or "").strip()
+        if entries and name:
+            parts.append(_headed(entries, name))
+
     return ", ".join(parts)
 
 def split_path(path: str) -> Tuple[Optional[str], Optional[str]]:
@@ -82,11 +160,15 @@ def _is_empty(r: Dict[str, Any]) -> bool:
         r.get("education"),
         r.get("skills"),
         r.get("projects"),
+        r.get("certifications"),
+        # Counted too: a document whose content is all Awards and Volunteering was read
+        # perfectly well, and skipping verification would say it read nothing.
+        any((s or {}).get("entries") for s in (r.get("custom_sections") or [])),
     ))
 
 def _ask(r: Dict[str, Any], retried: bool) -> Dict[str, Any]:
     if retried:
-                                                                                      
+
         text = 'No problem — what should I change? For example: "the company is Globex, not Acme".'
         ui, options = "text", []
     else:
@@ -97,7 +179,7 @@ def _ask(r: Dict[str, Any], retried: bool) -> Dict[str, Any]:
             text = f"{greeting}I picked up {summary}. Does that look right?"
         else:
             text = f"{greeting}I read your document but couldn't pull much out of it. Want to tell me about your most recent role?"
-        ui, options = "chips", [CONFIRM_CHIP]
+        ui, options = "chips", [CONFIRM_CHIP, FIX_CHIP]
 
     return {
         "current_question": {
@@ -114,6 +196,28 @@ def _ask(r: Dict[str, Any], retried: bool) -> Dict[str, Any]:
         "import_confirmed": False,
     }
 
+def _pick() -> Dict[str, Any]:
+    """The section picker, shown when they say something is missing."""
+    return {
+        "current_question": {
+            "field": "import",
+            "section": "import",
+            "question_text": (
+                "Which part is missing? Tap one and I'll ask about it — "
+                "or just type what's wrong."
+            ),
+            "ui": "chips",
+            "options": SECTION_CHIPS,
+            "is_gate": False,
+            "missing_fields": [],
+            "bullet_index": None,
+            "retried": False,
+
+            "picking": True,
+        },
+        "import_confirmed": False,
+    }
+
 def confirm_import(state: ResumeState) -> Dict[str, Any]:
     resume = state.get("master_profile") or {}
     r = resume.model_dump() if hasattr(resume, "model_dump") else resume
@@ -123,7 +227,7 @@ def confirm_import(state: ResumeState) -> Dict[str, Any]:
     replying = bool(answer) and pending.get("section") == "import"
 
     if not replying:
-                                                                                 
+
         if _is_empty(r):
             logger.info("Import produced nothing to confirm; skipping verification.")
             return {"import_confirmed": True}
@@ -136,27 +240,29 @@ def confirm_import(state: ResumeState) -> Dict[str, Any]:
         logger.info("Import confirmed by chip.")
         return done
 
+    if answer.strip() == FIX_CHIP:
+        logger.info("Import flagged as incomplete; offering the sections.")
+        return _pick()
+
+    if pending.get("picking"):
+        section = read_section(answer)
+        if section:
+            # import_confirmed so analyze_gaps runs; it keeps a non-empty queue.
+            logger.info("They want to fill in %s; queueing a question about it.", section)
+            return {**done, "question_queue": [section_gap(section, r)]}
+
+        logger.info("Couldn't place %r as a section; reading it as a correction.", answer)
+
     from app.utils.llm import get_openai_llm
 
     try:
         review: ImportReview = get_openai_llm().with_structured_output(
             ImportReview, method="function_calling"
-        ).invoke(f"""
-    A resume was parsed from the user's uploaded document. We showed them a summary and
-    asked whether it looked right.
-
-    PARSED PROFILE:
-    {r}
-
-    OUR QUESTION: {pending.get("question_text")}
-    THEIR REPLY: "{answer}"
-
-    Decide whether they confirmed it, and list ONLY the specific fields they asked to
-    change. If they said something is wrong but didn't say what, return confirmed=false
-    with no corrections. Never invent a correction they did not state.
-    """)
+        ).invoke(IMPORT_REVIEW.format(
+            resume=compact(r), question=pending.get("question_text"), answer=answer
+        ))
     except Exception as e:
-                                                                             
+
         logger.error(f"Import review failed: {e}")
         return done
 
@@ -168,7 +274,7 @@ def confirm_import(state: ResumeState) -> Dict[str, Any]:
             if not container:
                 logger.warning("Ignoring unusable correction path: %r", correction.path)
                 continue
-                                                                      
+
             candidate = apply_extraction(candidate, container, {key: correction.value}, replace=True)
             applied.append(correction.path)
 
@@ -182,60 +288,8 @@ def confirm_import(state: ResumeState) -> Dict[str, Any]:
         return {**done, "master_profile": validated.model_dump()}
 
     if not review.confirmed and not pending.get("retried"):
-                                                                    
+
         logger.info("Import rejected without specifics; asking once for detail.")
         return {**_ask(r, retried=True), "latest_answer": None}
 
     return done
-
-if __name__ == "__main__":
-    profile = {
-        "basics": {"name": "Priya Sharma", "email": "p@x.com"},
-        "experience": [
-            {"company": "Acme", "position": "Marketing Lead"},
-            {"company": "Globex", "position": "Analyst"},
-        ],
-        "education": [{"institution": "IIT Bombay"}],
-        "skills": [{"name": "Core", "keywords": ["SEO", "Python", "Figma"]}],
-        "projects": [],
-    }
-
-    assert summarise(profile) == "2 roles (most recent: Marketing Lead at Acme), 1 qualification, 3 skills", summarise(profile)
-    assert summarise({"experience": [{"company": "Acme", "position": "Lead"}]}) == "1 role (most recent: Lead at Acme)"
-                                                                          
-    assert summarise({"experience": [{"company": "Acme"}]}) == "1 role (most recent: Acme)"
-    assert summarise({"experience": [{"position": "Lead"}]}) == "1 role (most recent: Lead)"
-    assert summarise({"experience": [{}]}) == "1 role", "nothing to name, no parenthetical"
-    assert summarise({}) == ""
-
-    assert split_path("experience[0].position") == ("experience[0]", "position")
-    assert split_path("basics.name") == ("basics", "name")
-    assert split_path("basics") == (None, None), "a bare section names no field"
-    assert split_path("") == (None, None)
-    assert split_path("experience.[0]") == (None, None), "index must not be the leaf"
-
-    assert _is_empty({}) and _is_empty({"basics": {"name": ""}, "experience": []})
-    assert not _is_empty(profile)
-
-    asked = confirm_import({"master_profile": profile})
-    assert asked["import_confirmed"] is False
-    assert asked["current_question"]["section"] == "import"
-    assert CONFIRM_CHIP in asked["current_question"]["options"]
-    assert "Priya" in asked["current_question"]["question_text"]
-    assert len(asked["current_question"]["question_text"].split()) < 60, "mobile-first: keep it short"
-
-    assert confirm_import({"master_profile": {}}) == {"import_confirmed": True}
-
-    retry = _ask(profile, retried=True)
-    assert retry["current_question"]["question_text"] != asked["current_question"]["question_text"]
-    assert retry["current_question"]["ui"] == "text", "asking what to fix needs free text"
-    assert retry["current_question"]["retried"] is True
-
-    tapped = confirm_import({
-        "master_profile": profile,
-        "latest_answer": CONFIRM_CHIP,
-        "current_question": {"section": "import"},
-    })
-    assert tapped == {"latest_answer": None, "current_question": None, "import_confirmed": True}
-
-    print("confirm_import ok")

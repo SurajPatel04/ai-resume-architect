@@ -181,6 +181,181 @@ function MultiSelect({
   );
 }
 
+/**
+ * The finished bullet, with the one number missing from it left as a box to type in.
+ *
+ * The backend sends the whole rewritten line with `{}` marking where the figure goes,
+ * and the input is rendered in that spot rather than beside it. That is the point: the
+ * user is approving a sentence, not answering a question about one, so they read it as
+ * it will appear on the resume and the only word in it that is theirs is the one they
+ * typed. What gets sent back is that same sentence, and `read_slot` on the backend
+ * recognises it and stores it verbatim — no model re-derives it, so what was on screen
+ * is what lands.
+ *
+ * The box starts empty and nothing ever prefills it. A plausible "30" that somebody
+ * tabs past is a figure they never measured, printed on a real resume, and asked about
+ * in an interview they then fail — the rest of the pipeline refuses to invent numbers,
+ * and this refuses to invent them on the user's behalf.
+ *
+ * Free text, not `type="number"`: real answers include "2M", "1.5" and "40k", and a
+ * spinner that rejects them is worse than no spinner.
+ */
+function MetricInput({
+  template,
+  onSend,
+}: {
+  template: string;
+  onSend: (content: string) => void;
+}) {
+  const [value, setValue] = useState("");
+
+  const slot = template.indexOf("{}");
+  const before = template.slice(0, slot);
+  const after = template.slice(slot + 2);
+
+  const figure = value.trim();
+  const sentence = `${before}${figure}${after}`;
+
+  return (
+    <div className="mt-4">
+      <div className="rounded-lg border-l-2 border-amber-500/70 bg-amber-500/5 py-2.5 pl-3 pr-2 text-[13px] leading-loose text-amber-100/90">
+        {before}
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && figure) onSend(sentence);
+          }}
+          inputMode="decimal"
+          size={Math.max(figure.length, 3)}
+          placeholder="___"
+          aria-label="The figure you remember for this bullet point"
+          className="mx-0.5 w-16 rounded border border-amber-500/40 bg-neutral-900 px-1.5 py-0.5 text-center text-[13px] font-semibold text-white placeholder:text-neutral-600 focus:border-amber-400 focus:outline-none"
+        />
+        {after}
+      </div>
+
+      <button
+        onClick={() => onSend(sentence)}
+        disabled={!figure}
+        className="mt-3 min-h-9 rounded-full bg-white px-4 text-sm font-semibold text-black transition-transform hover:scale-105 active:scale-95 disabled:opacity-30 disabled:hover:scale-100"
+      >
+        {figure ? "Use this bullet" : "Type the figure you remember"}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * One proposed bullet with its blank rendered as a box, for use inside a list.
+ *
+ * Value and setter are lifted to the parent: the gate sends every filled line in one
+ * message, so the state has to live where the send button can see all of it.
+ */
+function SlotLine({
+  template,
+  value,
+  onChange,
+  onSubmit,
+}: {
+  template: string;
+  value: string;
+  onChange: (next: string) => void;
+  onSubmit: () => void;
+}) {
+  const slot = template.indexOf("{}");
+  const before = template.slice(0, slot);
+  const after = template.slice(slot + 2);
+
+  return (
+    <div className="rounded-lg border-l-2 border-amber-500/70 bg-amber-500/5 py-2.5 pl-3 pr-2 text-[13px] leading-loose text-amber-100/90">
+      {before}
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") onSubmit();
+        }}
+        inputMode="decimal"
+        placeholder="___"
+        aria-label="The figure you remember for this bullet point"
+        className="mx-0.5 w-16 rounded border border-amber-500/40 bg-neutral-900 px-1.5 py-0.5 text-center text-[13px] font-semibold text-white placeholder:text-neutral-600 focus:border-amber-400 focus:outline-none"
+      />
+      {after}
+    </div>
+  );
+}
+
+/**
+ * Every weak bullet the review found, each with the figure it is missing left blank.
+ *
+ * The whole card is one turn: fill in the ones you remember, leave the rest empty, send
+ * once. Three separate questions, each answerable with "I don't have that number", is
+ * the shape this gate exists to avoid — and having read all three the user already
+ * knows which they can answer, so making them wait to be asked one at a time spends
+ * three turns to learn what they knew at the start.
+ *
+ * Only the filled lines are sent, one per line, each a complete sentence. The backend
+ * matches each against the template it came from, so a user who fills in only the third
+ * box has that figure land on the third bullet — position is never assumed.
+ *
+ * Blanks stay blank. Nothing here prefills a plausible figure, for the same reason
+ * nothing else in this pipeline does: an untouched default is a number the candidate
+ * never measured and will be asked to defend.
+ */
+function ImpactGate({
+  gaps,
+  onSend,
+}: {
+  gaps: { label: string; original: string; reason: string; template: string }[];
+  onSend: (content: string) => void;
+}) {
+  const [values, setValues] = useState<Record<number, string>>({});
+
+  const filled = gaps
+    .map((gap, i) => ({ gap, figure: (values[i] || "").trim() }))
+    .filter(({ gap, figure }) => gap.template && figure)
+    .map(({ gap, figure }) => gap.template.replace("{}", figure));
+
+  const send = () => {
+    if (filled.length) onSend(filled.join("\n"));
+  };
+
+  return (
+    <div className="mt-4 space-y-5">
+      {gaps.map((gap, i) => (
+        <div key={i} className="space-y-2">
+          <p className="text-sm font-semibold text-white">{gap.label}</p>
+          <blockquote className="rounded-r-lg border-l-2 border-neutral-700 bg-neutral-800/40 py-1.5 pl-3 pr-2 text-[13px] italic leading-relaxed text-neutral-400">
+            {gap.original}
+          </blockquote>
+          <p className="text-[13px] text-neutral-400">
+            Why it could be stronger: {gap.reason}.
+          </p>
+          {gap.template ? (
+            <SlotLine
+              template={gap.template}
+              value={values[i] || ""}
+              onChange={(next) => setValues((prev) => ({ ...prev, [i]: next }))}
+              onSubmit={send}
+            />
+          ) : null}
+        </div>
+      ))}
+
+      <button
+        onClick={send}
+        disabled={!filled.length}
+        className="min-h-9 rounded-full bg-white px-4 text-sm font-semibold text-black transition-transform hover:scale-105 active:scale-95 disabled:opacity-30 disabled:hover:scale-100"
+      >
+        {filled.length
+          ? `Add ${filled.length === 1 ? "this bullet" : `these ${filled.length} bullets`}`
+          : "Fill in any you remember"}
+      </button>
+    </div>
+  );
+}
+
 export function ChatMessage({ message, isReceiving, onSendMessage }: ChatMessageProps) {
   const isAi = message.role === "ai";
 
@@ -255,6 +430,20 @@ export function ChatMessage({ message, isReceiving, onSendMessage }: ChatMessage
 
         {isAi && message.ui === "dates" && (
           <DateRange onSend={(content) => onSendMessage && onSendMessage(content)} />
+        )}
+
+        {isAi && message.ui === "metric" && message.meta?.template?.includes("{}") && (
+          <MetricInput
+            template={message.meta.template}
+            onSend={(content) => onSendMessage && onSendMessage(content)}
+          />
+        )}
+
+        {isAi && message.ui === "impact_gate" && !!message.meta?.gaps?.length && (
+          <ImpactGate
+            gaps={message.meta.gaps}
+            onSend={(content) => onSendMessage && onSendMessage(content)}
+          />
         )}
 
         {/* Every ui except the skills list can carry quick replies — a date question

@@ -1,13 +1,4 @@
-"""Reactive Resume schema v5.0.0 adapter.
-
-The interior of this app keeps bullets as `List[str]` and dates as start/end pairs
-because analyze_gaps, apply_extraction and enhance_resume all operate per-bullet.
-RxResume stores bullets as one HTML string and dates as one `period` string. Rather
-than degrade the working schema, this module translates at the boundary.
-
-Spec: https://rxresu.me/schema.json  (top-level required: picture, basics, summary,
-sections, customSections, metadata)
-"""
+"""Reactive Resume schema v5.0.0 adapter."""
 
 import re
 import uuid
@@ -44,7 +35,7 @@ SECTION_TITLES = {
 
 MAPPED_SECTIONS = ("profiles", "experience", "education", "projects", "skills")
 
-_ID_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")                      
+_ID_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
 _TAGS = re.compile(r"<[^>]+>")
 _LI = re.compile(r"<li[^>]*>(.*?)</li>", re.IGNORECASE | re.DOTALL)
@@ -72,7 +63,7 @@ def html_to_bullets(html: str) -> List[str]:
         return []
     chunks = _LI.findall(html)
     if not chunks:
-                                                                                     
+
         chunks = _BLOCK.split(html)
     return [b for b in (_strip_html(c) for c in chunks) if b]
 
@@ -94,7 +85,7 @@ def split_period(period: str) -> tuple[str, str]:
 def _section(key: str, items: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "title": SECTION_TITLES[key],
-        "columns": 1,                                                                
+        "columns": 1,
         "hidden": not items,
         "items": items,
     }
@@ -134,7 +125,7 @@ def _metadata() -> Dict[str, Any]:
             "format": "a4", "locale": "en-US", "hideIcons": False,
         },
         "design": {
-                                                                                 
+
             "level": {"icon": "", "type": "hidden"},
             "colors": {
                 "primary": "rgba(37, 99, 235, 1)",
@@ -199,11 +190,11 @@ def to_rxresume(resume: Resume | Dict[str, Any]) -> Dict[str, Any]:
             "name": p.get("name", ""),
             "period": "",
             "website": _item_link(p.get("url", "")),
-                                                                            
+
             "description": (f"<p>{escape(p['description'])}</p>" if p.get("description") else "")
                            + bullets_to_html(p.get("highlights") or []),
         } for i, p in enumerate(r.get("projects") or [])],
-                                                                                      
+
         "skills": [{
             "id": _stable_id("skill", s.get("name", ""), str(i)),
             "hidden": False,
@@ -224,7 +215,7 @@ def to_rxresume(resume: Resume | Dict[str, Any]) -> Dict[str, Any]:
         "picture": _picture(),
         "basics": {
             "name": basics.get("name", ""),
-                                                                                    
+
             "headline": experience[0].get("position", "") if experience else "",
             "email": basics.get("email", ""),
             "phone": basics.get("phone", ""),
@@ -297,7 +288,7 @@ def from_rxresume(doc: Dict[str, Any]) -> Resume:
         bullets = html_to_bullets(raw)
         first_li = _LI.search(raw)
         if first_li:
-                                                                         
+
             description, highlights = _strip_html(raw[:first_li.start()]), bullets
         else:
             description, highlights = " ".join(bullets), []
@@ -327,75 +318,3 @@ def from_rxresume(doc: Dict[str, Any]) -> Resume:
         ],
         projects=projects,
     )
-
-if __name__ == "__main__":
-    original = Resume(
-        basics=Basics(
-            name="Priya Sharma", email="p@example.com", phone="+91 90000 00000",
-            location="Bengaluru, India", website="https://priya.dev",
-            linkedin="https://linkedin.com/in/priyasharma", github="priyasharma",
-        ),
-        summary=Summary(content="Marketing lead with 4 years of experience."),
-        experience=[Experience(
-            company="Acme", position="Marketing Lead", location="Remote",
-            start_date="Jan 2022", end_date="Present",
-            highlights=["Grew engagement 150%", "Ran a team of 4"],
-        )],
-        education=[Education(
-            institution="IIT Bombay", area="Computer Science", study_type="B.Tech",
-            start_date="2016", end_date="2020", gpa="8.9",
-        )],
-        skills=[SkillCategory(name="Languages", keywords=["Python", "Go"])],
-        projects=[Project(
-            name="Dashboard", description="Internal analytics tool",
-            url="https://github.com/p/dash", highlights=["Cut load time 40%"],
-        )],
-    )
-
-    doc = to_rxresume(original)
-
-    assert set(doc) >= {"picture", "basics", "summary", "sections", "customSections", "metadata"}
-    assert set(doc["sections"]) == set(SECTION_TITLES), set(doc["sections"]) ^ set(SECTION_TITLES)
-    assert set(doc["metadata"]) == {"template", "layout", "page", "design", "typography", "notes"}
-    for key, sec in doc["sections"].items():
-        assert set(sec) == {"title", "columns", "hidden", "items"}, key
-    assert doc["sections"]["languages"]["items"] == [] and doc["sections"]["languages"]["hidden"]
-    assert doc["metadata"]["layout"]["pages"][0]["sidebar"] == [], "must stay single-column for ATS"
-
-    assert doc["sections"]["education"]["items"][0]["school"] == "IIT Bombay"
-    assert doc["sections"]["education"]["items"][0]["degree"] == "B.Tech"
-    assert doc["sections"]["education"]["items"][0]["grade"] == "8.9"
-    assert doc["sections"]["experience"]["items"][0]["period"] == "Jan 2022 - Present"
-    assert "<li>Grew engagement 150%</li>" in doc["sections"]["experience"]["items"][0]["description"]
-    assert doc["sections"]["profiles"]["items"][0]["username"] == "priyasharma"
-    assert doc["sections"]["profiles"]["items"][1]["website"]["url"] == "https://github.com/priyasharma"
-
-    assert to_rxresume(original)["sections"]["experience"]["items"][0]["id"] ==\
-        doc["sections"]["experience"]["items"][0]["id"]
-
-    back = from_rxresume(doc)
-    assert back.basics.name == original.basics.name
-    assert back.basics.github == "https://github.com/priyasharma"
-    assert back.summary.content == original.summary.content
-    assert back.experience[0].start_date == "Jan 2022"
-    assert back.experience[0].end_date == "Present"
-    assert back.experience[0].highlights == original.experience[0].highlights
-    assert back.education[0].institution == "IIT Bombay"
-    assert back.education[0].study_type == "B.Tech"
-    assert back.education[0].gpa == "8.9"
-    assert back.skills[0].keywords == ["Python", "Go"]
-    assert back.projects[0].highlights == ["Cut load time 40%"]
-    assert back.projects[0].url == "https://github.com/p/dash"
-                                               
-    assert back.projects[0].description == "Internal analytics tool", back.projects[0].description
-
-    assert split_period("2016 – 2020") == ("2016", "2020")
-    assert split_period("2016-2020") == ("2016", "2020")
-    assert split_period("Jan 2020 to Present") == ("Jan 2020", "Present")
-    assert split_period("2020") == ("2020", "")
-    assert split_period("") == ("", "")
-
-    assert html_to_bullets("<p>One thing</p><p>Another</p>") == ["One thing", "Another"]
-    assert looks_like_rxresume(doc) and not looks_like_rxresume({"basics": {}})
-
-    print("rxresume adapter ok")

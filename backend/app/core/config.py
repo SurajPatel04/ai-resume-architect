@@ -14,10 +14,10 @@ class RefreshTokenSettings(BaseModel):
     EXPIRE_MINUTES: int = 30
 
 class Settings(BaseSettings):
-         
+
     APP_NAME: str = "AI Resume Architect"
     DEBUG: bool = False
-                                                                   
+
     PUBLIC_BASE_URL: str = "http://localhost:8000"
 
     CORS_ORIGINS: str = "http://localhost:3000"

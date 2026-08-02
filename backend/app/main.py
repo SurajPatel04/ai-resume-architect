@@ -16,18 +16,18 @@ from app.graphs.graph import workflow
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-             
+
     app.state.llm = get_openai_llm()
-    
+
     db_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
-                                                                                 
+
     async with AsyncConnectionPool(
         conninfo=db_url,
         max_size=20,
         open=False,
         kwargs={"autocommit": True, "prepare_threshold": 0},
     ) as pool:
-                                                                                      
+
         await pool.wait()
 
         checkpointer = AsyncPostgresSaver(pool)

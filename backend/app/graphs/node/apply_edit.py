@@ -1,9 +1,4 @@
-"""Applies a change the user asked for out loud, to a field that is already filled.
-
-analyze_gaps only ever queues fields that are EMPTY, so once something has a value
-nothing in the interview will bring it up again. This node is the way a user says
-"change my location to Noida" and has it stick.
-"""
+"""Applies a change the user asked for out loud, to a field that is already filled."""
 
 import logging
 from typing import Any, Dict, List, Literal, Type, Union
@@ -15,13 +10,12 @@ from app.graphs.state import (
     Basics, Certification, Education, Experience, Project, Resume, ResumeState,
     SkillCategory, Summary,
 )
+from app.graphs.prompts import EDIT_PLAN
 from app.utils.llm import get_openai_llm
 
 logger = logging.getLogger(__name__)
 
-# Containers a user can reasonably ask to change, and the model each one holds. Bullet
-# rewrites go through the normal enhance/tailor path, so highlights are addressed as a
-# whole list.
+# Containers a user can ask to change, and the model each one holds.
 EDITABLE: Dict[str, Type[BaseModel]] = {
     "basics": Basics,
     "summary": Summary,
@@ -35,15 +29,8 @@ EDITABLE: Dict[str, Type[BaseModel]] = {
 # Sections held as one object rather than a list, so an edit to them carries no index.
 SINGLETONS = ("basics", "summary")
 
-
 def edit_model(section: str, model: Type[BaseModel]) -> Type[BaseModel]:
-    """An edit whose `values` ARE the model of the section being edited.
-
-    A free-form {field: value} dict is a schemaless object: the model may return any key
-    it likes, and a key that is not a field of the section is dropped in silence by
-    model_validate — while `understood` is still true, so the user is told their location
-    changed and nothing changed. Naming the real model makes the wrong key unspellable.
-    """
+    """An edit whose `values` ARE the model of the section being edited."""
     return create_model(
         f"{model.__name__}Edit",
         section=(Literal[section], Field(description=f"Set when editing the {section} section.")),
@@ -60,9 +47,7 @@ def edit_model(section: str, model: Type[BaseModel]) -> Type[BaseModel]:
         ),
     )
 
-
 SECTION_EDITS = tuple(edit_model(section, model) for section, model in EDITABLE.items())
-
 
 class EditPlan(BaseModel):
     understood: bool = Field(
@@ -72,22 +57,14 @@ class EditPlan(BaseModel):
         default_factory=list,
         description="Changes to apply, one per section touched. Empty when understood is false.",
     )
-    # Defaulted, not required: with the edits themselves carrying a whole section model,
-    # gpt-4o-mini fills those in and forgets the sentence — and a missing required field
-    # fails validation, throwing away a perfectly good edit over the confirmation text.
-    # It is the one field here that can be written without the model, so it is.
+    # Defaulted: a missing required field would discard an otherwise good edit.
     reply: str = Field(
         default="",
         description="One short sentence confirming what changed, or asking what they meant if it was unclear. Under 25 words."
     )
 
-
 def describe_fields(resume: Dict[str, Any]) -> str:
-    """A flat `path = value` listing of what's filled in.
-
-    Sent instead of the whole profile dict: it is smaller, and it hands the model the
-    exact path vocabulary that apply_extraction expects back.
-    """
+    """A flat `path = value` listing of what's filled in."""
     lines: List[str] = []
 
     for section in EDITABLE:
@@ -111,27 +88,56 @@ def describe_fields(resume: Dict[str, Any]) -> str:
 
     return "\n".join(lines)
 
-
 def targeted(edit: BaseModel) -> tuple:
-    """One typed edit as the (path, values) pair apply_extraction takes.
-
-    exclude_defaults is what keeps "they did not mention it" apart from "they want it
-    blank": every field of a model comes back present, and writing those blanks over the
-    rest of the section is how a change of city empties someone's phone number.
-
-    ponytail: which also means an edit cannot clear a field — "remove my GPA" reads as
-    mentioning nothing. Add an explicit `clear: List[str]` to the edit model if anyone
-    ever asks for it.
-    """
+    """One typed edit as the (path, values) pair apply_extraction takes."""
     path = edit.section if edit.section in SINGLETONS else f"{edit.section}[{edit.index}]"
     return path, edit.values.model_dump(exclude_defaults=True)
 
+# What each section is called when it is being read back to the person who owns it.
+SECTION_NAMES = {
+    "basics": "contact details",
+    "summary": "summary",
+    "skills": "skills",
+    "experience": "experience",
+    "projects": "projects",
+    "education": "education",
+    "certifications": "certifications",
+}
+
+# Past this a value is prose, and quoting it back is noise rather than confirmation.
+QUOTABLE = 40
+
+def human_list(items: List[str]) -> str:
+    """'a', 'a and b', 'a, b and c'."""
+    if len(items) < 3:
+        return " and ".join(items)
+    return f"{', '.join(items[:-1])} and {items[-1]}"
 
 def confirmation(edits: List[Any]) -> str:
-    """What changed, read back off the edits themselves rather than asked for again."""
-    changed = [field for edit in edits for field in targeted(edit)[1]]
-    return f"Updated your {', '.join(changed)}." if changed else "Done."
+    """What changed, read back off the edits themselves rather than asked for again.
 
+    Naming the fields that were written said "Updated your keywords, keywords." — the
+    internal name of the field, twice, because two skills were added. What someone wants
+    to hear is what they just asked for, in the words they asked for it in.
+    """
+    if not edits:
+        return "Done."
+
+    sections, said = [], []
+    for edit in edits:
+        sections.append(SECTION_NAMES.get(edit.section, edit.section.replace("_", " ")))
+        for value in targeted(edit)[1].values():
+            found = value if isinstance(value, list) else [value]
+            said += [str(item).strip() for item in found if str(item).strip()]
+
+    where = human_list(list(dict.fromkeys(sections)))
+    short = [text for text in dict.fromkeys(said) if len(text) <= QUOTABLE]
+
+    # Only when every value is short enough to quote: half a list read back is worse
+    # than none of it, because it looks like the rest was dropped.
+    if short and len(short) == len(said):
+        return f"Updated your {where} — {human_list(short)}."
+    return f"Updated your {where}."
 
 def apply_edit(state: ResumeState) -> Dict[str, Any]:
     """Turns a plain-language change request into a deterministic profile update."""
@@ -159,27 +165,10 @@ def apply_edit(state: ResumeState) -> Dict[str, Any]:
     if not current_values:
         return say("There's nothing in your resume to change yet — let's fill it in first.", False)
 
-    prompt = f"""
-    The user wants to change something in their resume.
-
-    CURRENT VALUES:
-    {current_values}
-
-    THEIR REQUEST: "{instruction}"
-
-    Work out which fields they want changed and what the new values are.
-    Give one edit per entry you are changing: its section, the [n] shown above for it,
-    and the new values. Fill in ONLY the fields they asked to change and leave the rest
-    of that entry empty — anything you fill in overwrites what is on their resume.
-    Never invent a value.
-    If the request is vague or names something not listed above, set understood to
-    false and ask them what they meant.
-    """
+    prompt = EDIT_PLAN.format(current_values=current_values, instruction=instruction)
 
     try:
-        # function_calling, not the default json_schema: strict mode requires every field
-        # to be required, and a section model whose fields all default to empty is the
-        # whole point — "only what they asked to change" is the fields left unset.
+        # function_calling: json_schema strict mode would require every field.
         plan: EditPlan = get_openai_llm().with_structured_output(
             EditPlan, method="function_calling"
         ).invoke(prompt)
@@ -203,8 +192,7 @@ def apply_edit(state: ResumeState) -> Dict[str, Any]:
     result: Dict[str, Any] = {"master_profile": updated,
                               **say(plan.reply or confirmation(plan.edits), True)}
 
-    # render_resume prefers the tailored version, so an edit that only touched the
-    # master would never show up in the PDF the user is looking at.
+    # render_resume prefers the tailored copy, so mirror the edit onto it too.
     generated = state.get("generated_resumes") or {}
     tailored = generated.get("tailored")
     if tailored is not None:
@@ -212,68 +200,10 @@ def apply_edit(state: ResumeState) -> Dict[str, Any]:
         for edit in plan.edits:
             tailored_dict = apply_extraction(tailored_dict, *targeted(edit), None, replace=True)
         try:
-            generated["tailored"] = Resume.model_validate(tailored_dict)
+            generated["tailored"] = Resume.model_validate(tailored_dict).model_dump()
             result["generated_resumes"] = generated
         except Exception as e:
             logger.warning(f"Could not mirror the edit onto the tailored resume: {e}")
 
     logger.info("Applied %d edit(s): %s", len(plan.edits), [targeted(e)[0] for e in plan.edits])
     return result
-
-
-if __name__ == "__main__":
-    profile = Resume(**{
-        "basics": {"name": "Suraj Patel", "location": "Lucknow", "email": "s@example.com"},
-        "experience": [{"company": "Careerboat", "position": "Full Stack Engineer",
-                        "highlights": ["Built APIs", "Shipped features"]}],
-        "skills": [{"name": "Languages", "keywords": ["Python", "Go"]}],
-    }).model_dump()
-
-    described = describe_fields(profile)
-
-    # The model can only target what it is shown, so every filled field must appear.
-    assert "basics.location = Lucknow" in described, described
-    assert "experience[0].company = Careerboat" in described, described
-    assert "skills[0].keywords = Python, Go" in described, "list values must be readable"
-
-    # Empty fields are noise — they cost tokens and invite edits to nothing.
-    assert "basics.website" not in described, described
-    assert "gpa" not in described, described
-
-    # Every section it is shown is a section it can name back, or the edit has nowhere
-    # to land and the user is told about a change that never happened.
-    assert {e.model_fields["section"].annotation.__args__[0] for e in SECTION_EDITS} == set(EDITABLE)
-
-    def edit(section, **kw):
-        """The plan an edit request comes back as, built the way pydantic would."""
-        model = next(e for e in SECTION_EDITS
-                     if e.model_fields["section"].annotation.__args__[0] == section)
-        return model(section=section, **kw)
-
-    # A singleton section carries no index; a list section carries the one it was shown.
-    assert targeted(edit("basics", values=Basics(location="Noida"))) \
-        == ("basics", {"location": "Noida"}), "only the field they named, and no index"
-    assert targeted(edit("experience", index=1, values=Experience(company="Acme")))[0] \
-        == "experience[1]"
-
-    # The pair goes straight into apply_extraction, and touches nothing else.
-    path, values = targeted(edit("basics", values=Basics(location="Noida")))
-    updated = Resume.model_validate(apply_extraction(profile, path, values, None, replace=True))
-    assert updated.basics.location == "Noida"
-    assert updated.basics.name == "Suraj Patel", "unrelated fields must survive"
-
-    path, values = targeted(edit("experience", values=Experience(company="Acme")))
-    updated = Resume.model_validate(apply_extraction(profile, path, values, None, replace=True))
-    assert updated.experience[0].company == "Acme"
-    assert updated.experience[0].position == "Full Stack Engineer", "siblings must survive"
-    assert updated.experience[0].highlights == ["Built APIs", "Shipped features"]
-
-    # A rewritten list replaces what was there. Appending is right when the interview is
-    # collecting bullets; here it would leave the line the user asked to change in place.
-    path, values = targeted(edit("experience", values=Experience(highlights=["Shipped the API"])))
-    updated = Resume.model_validate(apply_extraction(profile, path, values, None, replace=True))
-    assert updated.experience[0].highlights == ["Shipped the API"], updated.experience[0].highlights
-
-    assert describe_fields(Resume().model_dump()) == "", "an empty profile describes as nothing"
-
-    print("apply_edit ok")

@@ -1,9 +1,4 @@
-"""Structured LLM responses used by the resume interview.
-
-Section extraction responses deliberately contain the actual Resume models.  Keeping
-these schemas in one module makes the LLM contract explicit and avoids translating a
-typed result through generic ``{field, value}`` rows before it reaches the profile.
-"""
+"""Structured LLM responses used by the resume interview."""
 
 import copy
 import json
@@ -88,11 +83,7 @@ LIST_ITEM_SECTIONS = {"experience", "education", "projects", "certifications", "
 
 def merge_typed_items(resume: Dict[str, Any], section: str, target: str,
                       items: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Merge typed extraction items directly into a resume dictionary.
-
-    The first item fills the entry the question targeted; subsequent items are appended.
-    No generic entity rows or field/value reconstruction are involved.
-    """
+    """Merge typed extraction items directly into a resume dictionary."""
     payloads = [provided_values(item) for item in items]
     payloads = [item for item in payloads if item]
     if not payloads:
@@ -107,7 +98,7 @@ def merge_typed_items(resume: Dict[str, Any], section: str, target: str,
 
     entries = list(merged.get(section) or [])
     if section == "skills":
-                                                                                       
+
         by_name = {(entry.get("name") or "").strip().lower(): entry for entry in entries}
         for payload in payloads:
             name = payload.get("name", "").strip()
@@ -134,7 +125,7 @@ def merge_typed_items(resume: Dict[str, Any], section: str, target: str,
     first = dict(entries[index])
     for key, value in payloads[0].items():
         if isinstance(first.get(key), list) and isinstance(value, list):
-                                                                                   
+
             existing = list(first[key])
             seen = {str(item).strip().casefold() for item in existing}
             for item in value:
@@ -147,7 +138,7 @@ def merge_typed_items(resume: Dict[str, Any], section: str, target: str,
             first[key] = value
     entries[index] = first
     entries.extend(payloads[1:])
-                                                                                    
+
     unique_entries = []
     fingerprints = set()
     for entry in entries:

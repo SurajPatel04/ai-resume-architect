@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import AsyncSessionLocal, get_db
 from app.dependencies.auth import get_current_user, get_current_user_ws
 from app.models.users import User
+from app.graphs.node.choose_style import MINE_CHIP, SITE_CHIP
 from app.graphs.rxresume import to_rxresume
 from app.graphs.state import new_resume
 from app.utils.transcribe import TranscriptionError, transcribe
@@ -43,21 +44,11 @@ UPLOAD_CHUNK = 64 * 1024
 PDF_MAGIC = b"%PDF-"
 
 def _upload_dir(user_id: uuid.UUID) -> str:
-    """Where a user's staged uploads live.
-
-    Keyed by user, so an upload_id from one account can never resolve to another's
-    file — the socket handler rebuilds this path from the *authenticated* user.
-
-    ponytail: orphans (uploaded, never sent) are only reaped by the OS cleaning
-    /tmp. Add a sweep here if these ever outlive a reboot.
-    """
+    """Where a user's staged uploads live."""
     return os.path.join(tempfile.gettempdir(), "resume-uploads", str(user_id))
 
 def _staged_upload(user_id: uuid.UUID, upload_id: str) -> str | None:
-    """Resolve a staged upload to a path, or None if it isn't there.
-
-    Parsing upload_id as a UUID is what stops "../../etc/passwd" from becoming a path.
-    """
+    """Resolve a staged upload to a path, or None if it isn't there."""
     try:
         safe_id = str(uuid.UUID(str(upload_id)))
     except (ValueError, AttributeError, TypeError):
@@ -72,11 +63,7 @@ async def upload_resume(
     current_user: Annotated[User, Depends(get_current_user)],
     file: Annotated[UploadFile, File()],
 ):
-    """Stage a resume PDF, streamed to disk. Returns the id to send over the socket.
-
-    Kept off the WebSocket so a multi-megabyte body can't sit in memory or block the
-    chat channel's pings and cancels while it arrives.
-    """
+    """Stage a resume PDF, streamed to disk. Returns the id to send over the socket."""
 
     declared = request.headers.get("content-length")
     if declared and declared.isdigit() and int(declared) > UPLOAD_MAX_BYTES:
@@ -118,8 +105,9 @@ async def export_resume(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """The profile as a Reactive Resume v5.0.0 document, ready for any portal that
-    speaks the schema. Returns the tailored version when one exists."""
+    """The profile as a Reactive Resume v5.0.0 document, ready for any portal that speaks the
+    schema. Returns the tailored version when one exists.
+    """
     if not await owns_session(db, session_id, current_user.id):
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -156,7 +144,7 @@ async def chat_endpoint(
 
     try:
         while True:
-                                                    
+
             if time.time() > token_exp:
                 logger.warning("Token expired for user %s mid-connection", current_user.id)
                 await websocket.send_json({"type": "error", "code": 4401, "reason": "token_expired"})
@@ -195,7 +183,7 @@ async def chat_endpoint(
                 continue
 
             elif msg_type == "history":
-                                                                                  
+
                 session_id = payload.get("session_id")
                 if not session_id:
                     await websocket.send_json({"type": "error", "reason": "Missing session_id"})
@@ -246,7 +234,7 @@ async def chat_endpoint(
                 )
 
             elif msg_type == "voice":
-                                                                                 
+
                 audio_data = payload.get("audio")
                 if not audio_data:
                     await websocket.send_json({"type": "error", "reason": "Missing audio"})
@@ -287,7 +275,7 @@ async def chat_endpoint(
                 )
 
             elif msg_type == "create_scratch":
-                                                                                     
+
                 data = {
                     "name": f"{current_user.first_name} {current_user.last_name}".strip(),
                     "email": current_user.email,
@@ -302,7 +290,7 @@ async def chat_endpoint(
                 )
 
             elif msg_type == "upload":
-                                                                                         
+
                 uploaded_text = payload.get("text")
                 upload_id = payload.get("upload_id")
                 file_name = payload.get("file_name", "upload.pdf")
@@ -380,16 +368,7 @@ def _spent_since(before: dict, after: dict) -> dict:
     return {key: after.get(key, 0) - before.get(key, 0) for key in after}
 
 def _print_node_usage(nodes: str, usage: dict) -> None:
-    """One line per node as the graph walks it, so a surprise bill has a name on it.
-
-    The handler on the graph config accumulates across every node, so a node's own spend
-    is the difference between the total now and the total at the previous step. That is
-    exact only while the graph runs one node at a time, which it does — every edge here
-    picks a single target.
-
-    ponytail: reads the accumulator instead of tagging calls per node. Add a handler per
-    node if the graph ever fans out and these numbers start landing on the wrong name.
-    """
+    """One line per node as the graph walks it, so a surprise bill has a name on it."""
     print(
         f"[node] {nodes:<22} "
         f"{usage['input_tokens']:>7} in + {usage['output_tokens']:>6} out "
@@ -398,11 +377,7 @@ def _print_node_usage(nodes: str, usage: dict) -> None:
     )
 
 def _turn_usage(handler: UsageMetadataCallbackHandler) -> dict:
-    """Flatten the per-model breakdown the handler collects into one turn total.
-
-    A single turn can touch several nodes and more than one model, and each of those
-    is a separate key in `usage_metadata`.
-    """
+    """Flatten the per-model breakdown the handler collects into one turn total."""
     totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     for usage in (handler.usage_metadata or {}).values():
         totals["input_tokens"] += usage.get("input_tokens", 0)
@@ -413,25 +388,14 @@ def _turn_usage(handler: UsageMetadataCallbackHandler) -> dict:
 _usage_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 async def _bank_usage(graph, config: dict, session_id: str, turn: dict) -> dict:
-    """Add one turn to the session total and return the new total.
-
-    aupdate_state is not atomic across concurrent callers — two of them read the same
-    base checkpoint and the second overwrites the first. A cancelled turn reports its
-    spend while the replacing turn is already running, so that overlap is real.
-
-    ponytail: single-process lock. Needs Redis or a SQL upsert if this ever runs
-    behind more than one worker.
-    """
+    """Add one turn to the session total and return the new total."""
     async with _usage_locks[session_id]:
-                                                                                      
+
         await graph.aupdate_state(config, {"usage": turn}, as_node=START)
         return ((await graph.aget_state(config)).values or {}).get("usage") or turn
 
 async def _report_usage(websocket: WebSocket, graph, config: dict, session_id: str, handler: UsageMetadataCallbackHandler) -> None:
     """Fold this turn's tokens into the session total, print it, and push it to the client.
-
-    The running total lives in the checkpoint under `usage`, so it rides along with the
-    rest of the session state instead of needing its own table.
     """
     turn = _turn_usage(handler)
     if not turn["total_tokens"]:
@@ -441,7 +405,7 @@ async def _report_usage(websocket: WebSocket, graph, config: dict, session_id: s
     try:
         session_total = await _bank_usage(graph, config, session_id, turn)
     except Exception as e:
-                                                                         
+
         logger.warning("Could not write usage into graph state: %r", e)
 
     print(
@@ -453,6 +417,43 @@ async def _report_usage(websocket: WebSocket, graph, config: dict, session_id: s
     )
 
     await websocket.send_json({"type": "usage", "turn": turn, "session": session_total})
+
+async def _session_source(graph, config: dict) -> str | None:
+    """The uploaded original this session is keeping, if any."""
+    try:
+        return ((await graph.aget_state(config)).values or {}).get("source_pdf")
+    except Exception as e:
+        logger.warning("Could not read the session's source PDF: %r", e)
+        return None
+
+async def _layout_options(graph, config: dict) -> list:
+    """The layout the finished PDF is not already in, so both are one tap away.
+
+    Offering only "match my original" left the way back unspoken: someone who had
+    matched their original and wanted the plain template had nothing to tap, and typing
+    it landed on the intent classifier instead of on the choice they were making.
+    """
+    try:
+        values = (await graph.aget_state(config)).values or {}
+    except Exception as e:
+        logger.warning("Could not read the session's layout choice: %r", e)
+        return [MINE_CHIP]
+
+    if not values.get("source_pdf"):
+        # Nothing was uploaded, so there is no original to go back to.
+        return []
+    return [SITE_CHIP] if values.get("style_choice") == "mine" else [MINE_CHIP]
+
+async def _is_session_source(graph, config: dict, path: str) -> bool:
+    """Whether this upload is the one the session is keeping.
+
+    Kept for as long as the session lives, not just until the first PDF. The layout can
+    be re-matched at any point afterwards — "actually, use my original" — and reading it
+    needs the file. Deleting it at completion made that request fall back to the site
+    template every time, silently, because the path was still in state and the file
+    behind it was not.
+    """
+    return await _session_source(graph, config) == path
 
 def _greeting(full_name: str) -> str:
     """How a from-scratch session opens, before the first question is put."""
@@ -490,7 +491,7 @@ async def run_and_stream_graph(websocket: WebSocket, uploaded_text: str | None, 
         logger.info("Starting graph session=%s source=%s", session_id,
                     "upload" if uploaded_file_path else ("text" if uploaded_text else "answer"))
         async with AsyncSessionLocal() as db:
-                                                                                        
+
             if not await ensure_session(db, session_id, user_id, opening):
                 logger.warning("User %s tried to open session %s owned by someone else", user_id, session_id)
                 await websocket.send_json({"type": "error", "reason": "Session not found"})
@@ -507,16 +508,16 @@ async def run_and_stream_graph(websocket: WebSocket, uploaded_text: str | None, 
 
             if scratch_data is not None:
                 resume = new_resume()
-                resume.basics.name = scratch_data.get("name", "")
-                resume.basics.email = scratch_data.get("email", "")
+                resume["basics"]["name"] = scratch_data.get("name", "")
+                resume["basics"]["email"] = scratch_data.get("email", "")
 
-                hello = _greeting(resume.basics.name)
+                hello = _greeting(resume["basics"]["name"])
                 await add_message(db, session_id, "assistant", hello)
                 await websocket.send_json({"type": "notice", "reason": hello})
 
                 input_state = _new_state(session_id, user_id, master_profile=resume)
             elif answer and not existing:
-                                                                                         
+
                 input_state = _new_state(
                     session_id, user_id,
                     uploaded_text=answer,
@@ -532,11 +533,11 @@ async def run_and_stream_graph(websocket: WebSocket, uploaded_text: str | None, 
                 )
 
             ats: dict = {}
-                                                                                       
+
             banked = _turn_usage(usage_handler)
 
             async for output in graph.astream(input_state, config, stream_mode="updates"):
-                                                                                     
+
                 running = _turn_usage(usage_handler)
                 _print_node_usage(", ".join(output), _spent_since(banked, running))
                 banked = running
@@ -567,6 +568,7 @@ async def run_and_stream_graph(websocket: WebSocket, uploaded_text: str | None, 
                             question["question_text"],
                             question.get("ui"),
                             question.get("options"),
+                            question.get("meta"),
                         )
 
                     if node == "parse_document" and not state_updates.get("master_profile"):
@@ -579,7 +581,7 @@ async def run_and_stream_graph(websocket: WebSocket, uploaded_text: str | None, 
                         if pdf_path:
                             text = _completion_message(pdf_path, ats)
                         else:
-                                                                                    
+
                             text = (
                                 f"Your resume is written, but {state_updates.get('render_error') or 'the PDF could not be generated'} "
                                 "Your answers are saved — try again once that's sorted."
@@ -589,7 +591,12 @@ async def run_and_stream_graph(websocket: WebSocket, uploaded_text: str | None, 
                             "field": "system",
                             "question_text": text,
                             "ui": "chips",
-                            "options": ["Tailor for another job"],
+                            # The layout chip is here rather than only on the question
+                            # that asked once: changing your mind about the look is a
+                            # normal thing to do after seeing the PDF, and it goes both
+                            # ways round.
+                            "options": ["Tailor for another job",
+                                        *await _layout_options(graph, config)],
                         }
                         await add_message(
                             db, session_id, "assistant",
@@ -608,7 +615,7 @@ async def run_and_stream_graph(websocket: WebSocket, uploaded_text: str | None, 
                 "session_id": session_id,
             })
     except asyncio.CancelledError:
-                                                                          
+
         await _report_usage(websocket, graph, config, session_id, usage_handler)
 
         await websocket.send_json({
@@ -619,5 +626,7 @@ async def run_and_stream_graph(websocket: WebSocket, uploaded_text: str | None, 
         logger.error("Error during graph execution: %r", e, exc_info=True)
         await websocket.send_json({"type": "error", "reason": "Graph execution failed"})
     finally:
+        # Not unconditionally, any more. parse_document adopts the upload as `source_pdf`
         if uploaded_file_path and os.path.exists(uploaded_file_path):
-            os.remove(uploaded_file_path)
+            if not await _is_session_source(graph, config, uploaded_file_path):
+                os.remove(uploaded_file_path)

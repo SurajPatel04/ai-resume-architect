@@ -27,7 +27,7 @@ def verify_access_token_with_exp(token: str) -> tuple[uuid.UUID, float]:
 
         user_id_str: str | None = payload.get("sub")
         exp: float | None = payload.get("exp")
-        
+
         if not user_id_str or exp is None:
             raise credentials_exception
 

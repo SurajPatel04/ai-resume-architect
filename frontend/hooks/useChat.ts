@@ -5,12 +5,36 @@ import type { Resume } from "@/types/resume";
 
 export type MessageRole = "human" | "ai";
 
+/** One weak bullet on the impact gate's card, as it is drawn. */
+export interface ImpactGap {
+  /** "Current bullet 2 — Projects: InsightFlow" */
+  label: string;
+  /** What the resume says today. */
+  original: string;
+  /** Why it was picked out — "describes a duty rather than an achievement". */
+  reason: string;
+  /** The proposed rewrite, `{}` marking the blank. Empty when none was usable. */
+  template: string;
+}
+
+/** Whatever a `ui` needs beyond a list of chips. */
+export interface MessageMeta {
+  /**
+   * "metric": the whole rewritten bullet, with `{}` marking the one spot the
+   * candidate's figure goes — "…lifting success to {}%.".
+   */
+  template?: string;
+  /** "impact_gate": every weak bullet, each with its own blank to fill in. */
+  gaps?: ImpactGap[];
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
   content: string;
   ui?: string;
   options?: string[];
+  meta?: MessageMeta;
 }
 
 /** A saved conversation, as returned by the backend's `list_sessions`. */
@@ -244,13 +268,16 @@ export function useChat() {
 
             setMessages(
               (payload.messages || []).map((m: {
-                role: string; content: string; ui?: string; options?: string[];
+                role: string; content: string; ui?: string; options?: string[]; meta?: MessageMeta;
               }) => ({
                 id: crypto.randomUUID(),
                 role: m.role === "user" ? "human" : "ai",
                 content: m.content,
                 ui: m.ui,
                 options: m.options,
+                // Without this a reloaded session redraws a "metric" question as a bare
+                // text box, having forgotten what it was asking for a number of.
+                meta: m.meta,
               } as ChatMessage))
             );
 
@@ -329,7 +356,8 @@ export function useChat() {
                   role: "ai",
                   content: data.current_question.question_text,
                   ui: data.current_question.ui,
-                  options: data.current_question.options
+                  options: data.current_question.options,
+                  meta: data.current_question.meta ?? undefined
                 }
               ]);
             }

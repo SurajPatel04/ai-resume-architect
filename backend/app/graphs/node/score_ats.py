@@ -2,6 +2,8 @@ import logging
 from typing import Any, Dict, List
 from app.graphs.state import ResumeState
 from app.utils.llm import get_openai_llm
+from app.graphs.prompts import ATS_SCORE
+from app.utils.prompt import compact
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -21,9 +23,8 @@ class ATSResult(BaseModel):
     )
 
 def score_ats(state: ResumeState) -> Dict[str, Any]:
-    """
-    Scores the tailored resume against the job description (0-100) and produces
-    a short keyword/gap breakdown. JD-only: if no JD, skip scoring.
+    """Scores the tailored resume against the job description (0-100) and produces a short
+    keyword/gap breakdown. JD-only: if no JD, skip scoring.
     """
     logger.info("Scoring resume against job description (ATS)...")
 
@@ -42,30 +43,10 @@ def score_ats(state: ResumeState) -> Dict[str, Any]:
     llm = get_openai_llm()
     structured_llm = llm.with_structured_output(ATSResult)
 
-    prompt = f"""
-    You are an ATS (Applicant Tracking System) evaluator.
-
-    JOB DESCRIPTION:
-    ---
-    {job_description}
-    ---
-
-    CANDIDATE RESUME DATA:
-    ---
-    {r}
-    ---
-
-    Score how well this resume matches the job description from 0 to 100, based on:
-    - Presence of the key skills, tools, and qualifications the JD asks for.
-    - Relevance of the experience and summary to the role.
-    - Keyword alignment.
-
-    List the important JD keywords that ARE present (matched_keywords) and those that are MISSING (missing_keywords).
-    Give 2-3 sentences of concrete, actionable feedback. Do NOT invent skills the candidate has; base everything only on the resume data provided.
-    """
-
     try:
-        result: ATSResult = structured_llm.invoke(prompt)
+        result: ATSResult = structured_llm.invoke(
+            ATS_SCORE.format(job_description=job_description, resume=compact(r))
+        )
         logger.info(f"ATS score: {result.score}")
         return {
             "ats_score": result.score,

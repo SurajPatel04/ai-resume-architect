@@ -2,16 +2,29 @@ import logging
 from typing import Any, Dict, List
 from app.graphs.state import ResumeState, Resume
 from app.utils.llm import get_openai_llm
+from app.graphs.node.enhance_resume import aligned
+from app.graphs.prompts import TAILOR
+from app.utils.prompt import compact
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
 class TailoredExperience(BaseModel):
+    company: str = Field(
+        default="",
+        description="The employer this entry is about, copied exactly from the input, so its "
+        "highlights can be matched back to the right job.",
+    )
     highlights: List[str] = Field(
         description="Reworded highlights for this experience, reordered and rephrased to emphasize relevance to the target job. Same facts, no invented experience."
     )
 
 class TailoredProject(BaseModel):
+    name: str = Field(
+        default="",
+        description="The project's name, copied exactly from the input, so its highlights can be "
+        "matched back to the right project.",
+    )
     highlights: List[str] = Field(
         description="Reworded highlights for this project, emphasizing relevance to the target job. Same facts, no invented experience."
     )
@@ -32,11 +45,9 @@ class TailoredResult(BaseModel):
     )
 
 def tailor_resume(state: ResumeState) -> Dict[str, Any]:
-    """
-    Tailors the master_profile against a job description.
-    Rewrites summary + highlights and reorders skills to emphasize JD-relevant content,
-    WITHOUT inventing experience. Writes the result to generated_resumes["tailored"].
-    Never mutates master_profile.
+    """Tailors the master_profile against a job description. Rewrites summary + highlights and
+    reorders skills to emphasize JD-relevant content, WITHOUT inventing experience. Writes
+    the result to generated_resumes["tailored"]. Never mutates master_profile.
     """
     logger.info("Tailoring resume against job description...")
 
@@ -51,7 +62,7 @@ def tailor_resume(state: ResumeState) -> Dict[str, Any]:
         logger.info("No job_description present. Asking user to provide one.")
         ask = "Sure — paste the job description you'd like me to tailor your resume for."
         return {
-                                                                                  
+
             "current_question": {
                 "field": "awaiting_jd",
                 "question_text": ask,
@@ -69,48 +80,29 @@ def tailor_resume(state: ResumeState) -> Dict[str, Any]:
     llm = get_openai_llm()
     structured_llm = llm.with_structured_output(TailoredResult)
 
-    prompt = f"""
-    You are an expert resume writer tailoring a candidate's resume to a specific job.
-
-    TARGET JOB DESCRIPTION:
-    ---
-    {job_description}
-    ---
-
-    CANDIDATE'S CURRENT RESUME DATA:
-    ---
-    {r}
-    ---
-
-    Your task:
-    1. Rewrite the professional summary to position the candidate for THIS job (3-4 sentences max).
-    2. Rewrite and reorder the highlights of each experience and project to emphasize what matters most for this job. Lead with the most relevant, impactful bullets.
-    3. Reorder the candidate's EXISTING skills so the most job-relevant ones come first.
-
-    STRICT RULES:
-    - Do NOT invent experience, metrics, skills, or achievements the candidate did not mention.
-    - Only rephrase, reorder, and re-emphasize what is already there.
-    - Keep experience and project arrays in the EXACT same order as provided (only the highlights inside them change).
-    - Mirror the job description's terminology where it truthfully matches the candidate's real experience.
-    """
-
     try:
-        tailored: TailoredResult = structured_llm.invoke(prompt)
+        tailored: TailoredResult = structured_llm.invoke(
+            TAILOR.format(job_description=job_description, resume=compact(r))
+        )
 
         if "summary" not in r or r["summary"] is None:
             r["summary"] = {}
         r["summary"]["content"] = tailored.summary_content
 
-        for i, exp in enumerate(r.get("experience", [])):
-            if i < len(tailored.experience):
-                exp["highlights"] = tailored.experience[i].highlights
+        # Matched by name, not by slot — same reason as enhance_resume: a reordered
+        # response otherwise writes one entry's bullets onto another.
+        jobs = r.get("experience", [])
+        for exp, match in zip(jobs, aligned(jobs, tailored.experience, "company")):
+            if match is not None:
+                exp["highlights"] = match.highlights
 
-        for i, proj in enumerate(r.get("projects", [])):
-            if i < len(tailored.projects):
-                proj["highlights"] = tailored.projects[i].highlights
+        works = r.get("projects", [])
+        for proj, match in zip(works, aligned(works, tailored.projects, "name")):
+            if match is not None:
+                proj["highlights"] = match.highlights
 
         if tailored.skills_order and r.get("skills"):
-                                                                                
+
             rank = {s: i for i, s in enumerate(tailored.skills_order)}
             for cat in r["skills"]:
                 cat["keywords"] = sorted(
@@ -118,7 +110,8 @@ def tailor_resume(state: ResumeState) -> Dict[str, Any]:
                     key=lambda k: rank.get(k, len(rank)),
                 )
 
-        tailored_resume = Resume.model_validate(r)
+        # Dumped, not a model: generated_resumes is checkpointed.
+        tailored_resume = Resume.model_validate(r).model_dump()
 
         generated = state.get("generated_resumes", {})
         generated["tailored"] = tailored_resume
@@ -133,10 +126,9 @@ def tailor_resume(state: ResumeState) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Failed to tailor resume: {e}")
         generated = state.get("generated_resumes", {})
-        if hasattr(master_profile, "model_dump"):
-            generated["tailored"] = master_profile.__class__.model_validate(master_profile.model_dump())
-        else:
-            generated["tailored"] = master_profile
+        generated["tailored"] = (
+            master_profile.model_dump() if hasattr(master_profile, "model_dump") else master_profile
+        )
         return {
             "generated_resumes": generated,
             "job_description": job_description,

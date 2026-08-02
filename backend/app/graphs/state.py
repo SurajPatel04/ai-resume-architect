@@ -2,12 +2,7 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 from pydantic import BaseModel, Field
 
 def merge_usage(left: Optional[Dict[str, int]], right: Optional[Dict[str, int]]) -> Dict[str, int]:
-    """Reducer for `usage`: token counts add up instead of overwriting.
-
-    Writers only ever report what THEIR turn spent; the running total is LangGraph's
-    job. Without this the caller has to read-modify-write across an await, and two
-    turns landing together both read the same prior value and one of them is lost.
-    """
+    """Reducer for `usage`: token counts add up instead of overwriting."""
     left, right = left or {}, right or {}
     return {
         key: left.get(key, 0) + right.get(key, 0)
@@ -58,6 +53,23 @@ class Certification(BaseModel):
     date: str = Field(default="", description="Date earned, or validity period, as written on the resume")
     url: str = Field(default="", description="Public credential or verification URL, if the candidate provides one")
 
+class CustomEntry(BaseModel):
+    title: str = Field(default="", description="What this entry is called — the award, the role, the publication title")
+    subtitle: str = Field(default="", description="Who it was with or for: the organisation, publisher, or issuing body")
+    date: str = Field(default="", description="Date or period, exactly as the candidate wrote it")
+    highlights: List[str] = Field(default_factory=list, description="Bullet points about this entry, if there are any")
+
+class CustomSection(BaseModel):
+    """A section this schema does not model: Volunteering, Awards, Publications, Languages.
+
+    Resumes carry sections nobody can enumerate in advance. Dropping them on import
+    loses work the candidate chose to put on the page, so they are kept as named
+    groups of entries and rendered in the same shape as everything else.
+    """
+
+    name: str = Field(default="", description="The section heading as the resume writes it, e.g. 'Volunteering'")
+    entries: List[CustomEntry] = Field(default_factory=list, description="The entries listed under that heading")
+
 class Resume(BaseModel):
     basics: Basics = Field(default_factory=Basics, description="Basic personal details and contact information")
     summary: Summary = Field(default_factory=Summary, description="Professional summary section")
@@ -65,8 +77,15 @@ class Resume(BaseModel):
     education: List[Education] = Field(default_factory=list, description="Education history and academic credentials")
     skills: List[SkillCategory] = Field(default_factory=list, description="List of technical and soft skills grouped by category (e.g., Languages, Frameworks, Tools)")
     projects: List[Project] = Field(default_factory=list, description="Notable personal, academic, or open-source projects")
-                                                                                          
+
     certifications: List[Certification] = Field(default_factory=list, description="Certifications, licences, awards and honours")
+
+    custom_sections: List[CustomSection] = Field(
+        default_factory=list,
+        description="Any other section the resume has that the fields above do not cover — "
+        "Volunteering, Awards, Publications, Languages, Interests, Achievements. Keep the "
+        "heading the resume uses. Never duplicate here anything already captured above.",
+    )
 
 LIST_SECTIONS = {
     "experience": Experience,
@@ -77,11 +96,12 @@ LIST_SECTIONS = {
 SECTION_MODELS = {"basics": Basics, "summary": Summary,
                   "certifications": Certification, **LIST_SECTIONS}
 
-def new_resume() -> Resume:
-    return Resume()
+def new_resume() -> Dict[str, Any]:
+    """The empty profile, as a plain dict."""
+    return Resume().model_dump()
 
 class ResumeState(TypedDict):
-             
+
     session_id: str
     user_id: Optional[str]
 
@@ -89,12 +109,16 @@ class ResumeState(TypedDict):
 
     latest_answer: Optional[str]
 
+    # Set by the planner when a message carries a whole new entry to file.
+    add_section: Optional[str]
+
     workflow_type: Optional[Literal["BUILD_PROFILE", "TAILOR_RESUME", "EDIT_PROFILE"]]
     workflow: Optional[str]
     current_step: Optional[str]
     completion: int
 
-    master_profile: Resume
+    # A dict, not a Resume: nothing pydantic reaches the checkpoint. See new_resume().
+    master_profile: Dict[str, Any]
 
     generated_resumes: Dict[str, Resume]
     resume_versions: List[Dict[str, Any]]
@@ -136,13 +160,24 @@ class ResumeState(TypedDict):
 
     ats_score: Optional[int]
     ats_feedback: Optional[Dict[str, Any]]
-                                                                                  
+
     quality_score: Optional[int]
     quality_feedback: Optional[List[Dict[str, Any]]]
     generated_resume: Optional[str]
     pdf_path: Optional[str]
 
     render_error: Optional[str]
+
+    # Render-only: sections left off the PDF, and the two-page escape hatch.
+    dropped_sections: List[str]
+    page_limit_waived: Optional[bool]
+    bullet_cap: Optional[int]
+    dropped_entries: List[str]
+
+    # The uploaded PDF kept for choose_style, and what the user decided about it.
+    source_pdf: Optional[str]
+    style_choice: Optional[Literal["site", "mine"]]
+    style_spec: Optional[Dict[str, Any]]
 
     edit_applied: Optional[bool]
 

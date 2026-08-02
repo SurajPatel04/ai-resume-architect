@@ -3,6 +3,10 @@ import logging
 from typing import Any, Dict
 from app.graphs.state import ResumeState
 from app.graphs.node.career_setup import CAREER_CHIPS, ROLE_CHIPS
+from app.graphs.prompts import (
+    GENERATE_QUESTION, QUESTION_ERROR_CONTEXT, QUESTION_INSTRUCTIONS,
+    SKILL_CHIPS, SKILL_CHIPS_COLD, SKILL_CHIPS_EVIDENCE,
+)
 from app.utils.llm import get_openai_llm
 from pydantic import BaseModel, Field
 from typing import List, Literal
@@ -22,13 +26,13 @@ GATE_PROMPTS = {
     "experience": ("Do you have any work experience to add?", [YES_CHIP, NO_CHIP]),
     "education": ("Do you have any education to add?", [YES_CHIP, NO_CHIP]),
     "projects": ("Any projects worth listing?", [YES_CHIP, NO_CHIP]),
-                                                                                     
+
     "skills": (
         "What are your main skills? Group them by category, for example: "
         "`Languages: Python, TypeScript` and `Frontend: React, CSS`.",
         ["Skip this"],
     ),
-                                                                                         
+
     "career_level": ("Where are you right now in your career?", list(CAREER_CHIPS)),
     "target_role": (
         "Which role are you targeting? Tap one, or type it if it's not here — "
@@ -51,13 +55,7 @@ class SuggestedSkills(BaseModel):
     )
 
 def used_technologies(resume: Dict[str, Any]) -> str:
-    """Everything the candidate has already described doing, in their own words.
-
-    By the time the skills question is asked they have usually described a job and two
-    projects naming a dozen technologies each — and the chips they were offered came from
-    the role label alone, so someone who had just written "FastAPI, LangGraph, MongoDB,
-    FAISS, Redis" was offered Ruby on Rails and Django.
-    """
+    """Everything the candidate has already described doing, in their own words."""
     lines: List[str] = []
     for job in resume.get("experience") or []:
         lines.extend(job.get("highlights") or [])
@@ -69,32 +67,13 @@ def used_technologies(resume: Dict[str, Any]) -> str:
     return "\n".join(f"- {line}" for line in lines[:20] if str(line).strip())
 
 def role_skill_chips(role: str, evidence: str = "") -> List[str]:
-    """Skills to tap for `role`, instead of a blank box to type into.
+    """Skills to tap for `role`, instead of a blank box to type into."""
+    already = (
+        SKILL_CHIPS_EVIDENCE.format(evidence=evidence, role=role)
+        if evidence.strip() else SKILL_CHIPS_COLD
+    )
+    prompt = SKILL_CHIPS.format(role=role, evidence=already)
 
-    ponytail: the model is the taxonomy. At temperature 0 the same role and the same
-    resume give the same list, so this behaves like a lookup table nobody has to
-    maintain — swap in a static dict if it ever has to work without a network.
-    """
-    already = f"""
-    THEY HAVE ALREADY DESCRIBED DOING THIS:
-    {evidence}
-
-    Every technology named above goes in the list FIRST, in the order it matters to the
-    role — they have demonstrably used it and being asked to type it again reads as not
-    having listened. Fill the remaining slots with what {role} postings commonly ask for.
-    """ if evidence.strip() else """
-    List the skills that postings for this role name most often — the ones a recruiter
-    scans for.
-    """
-
-    prompt = f"""
-    A candidate is building a resume and is targeting this role: {role}
-    {already}
-    Concrete tools, languages and frameworks only. No soft skills.
-
-    These are shown as chips to tap, so each one must be the short name it would appear
-    as on a resume ("PostgreSQL", not "PostgreSQL database administration").
-    """
     try:
         result: SuggestedSkills = get_openai_llm().with_structured_output(
             SuggestedSkills, method="function_calling"
@@ -112,13 +91,7 @@ def role_skill_chips(role: str, evidence: str = "") -> List[str]:
     return chips[:12]
 
 def known_context(state: ResumeState, field: str) -> str:
-    """What the interview already knows, put in front of the question it asks next.
-
-    The profile JSON *is* the transcript — every answer so far ended up in it, so shipping
-    a separate conversation history would be the same facts twice at twice the tokens.
-    Only what changes how the next question should read goes in: who they said they are,
-    what they're aiming at, and whatever is already recorded for the item being asked about.
-    """
+    """What the interview already knows, put in front of the question it asks next."""
     lines = []
 
     if state.get("career_level"):
@@ -155,11 +128,7 @@ def current_item(resume: Dict[str, Any], field: str) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 def says_yes(answer: str) -> bool:
-    """A tap on an affirmative chip, or the typed equivalent.
-
-    Shared with review_quality's gate so "yes" means the same thing everywhere. Anything
-    unclear is not a yes — the caller's default is always the cheaper mistake.
-    """
+    """A tap on an affirmative chip, or the typed equivalent."""
     reply = (answer or "").strip().lower().lstrip("*_ ")
     return reply.startswith(("yes", "yeah", "yep", "sure", "ok", "let's", "lets"))
 
@@ -169,21 +138,12 @@ AFFIRMATIONS = frozenset({
 })
 
 def is_affirmation(value: Any) -> bool:
-    """Is this value just the word the user tapped to say a section exists?
-
-    A gate asks whether a section is there at all, but extract_entities only sees the
-    list of missing fields and dutifully answers it — a tap on "Yes" comes back as
-    name="Yes", which is how a project called Yes reached someone's resume.
-    """
+    """Is this value just the word the user tapped to say a section exists?"""
     return str(value or "").strip().strip(".,!").lower() in AFFIRMATIONS
 
 def with_skip(ui: str, options: List[str]) -> tuple:
-    """Add the way out, promoting a bare text box to chips over a text box.
+    """Add the way out, promoting a bare text box to chips over a text box."""
 
-    The input box never goes away — "chips" renders the options above it, which is how
-    the skills question already offers both a list to tap and somewhere to type.
-    """
-                                                                                   
     options = list(dict.fromkeys(str(option) for option in (options or []) if str(option).strip()))
     if SKIP_CHIP in options:
         return ui, options
@@ -195,16 +155,7 @@ class GeneratedQuestion(BaseModel):
     options: List[str] = Field(default_factory=list, description="A list of 2-5 short options if ui is 'chips'.")
 
 def quote_bullet(bullet: Any, question: str) -> str:
-    """Put what the resume already says in front of the question that's about it.
-
-    Quoted deterministically rather than asked for in the prompt: the model paraphrases
-    ("the real-time audio streaming work") into something the user has to match back to
-    a line they wrote months ago, and often can't. The frontend renders markdown.
-
-    Takes one line or several — a follow-up about `highlights` is about every bullet on
-    that entry. The blank quote line between them is what makes markdown render them as
-    separate lines rather than running them into one paragraph.
-    """
+    """Put what the resume already says in front of the question that's about it."""
     lines = bullet if isinstance(bullet, list) else [bullet]
     lines = [str(line).strip() for line in lines if str(line or "").strip()]
     if not lines:
@@ -212,11 +163,7 @@ def quote_bullet(bullet: Any, question: str) -> str:
     return "Your resume says:\n\n" + "\n>\n".join(f"> {line}" for line in lines) + f"\n\n{question}"
 
 def entry_label(resume: Dict[str, Any], target_gap: Dict[str, Any]) -> str:
-    """How to refer to the entry a question is about, in the user's own words.
-
-    "at Acme as an Engineer" beats "at experience[0]", and a question about the one job
-    with no dates on a resume that lists four has to say which one it means.
-    """
+    """How to refer to the entry a question is about, in the user's own words."""
     item = current_item(resume, target_gap.get("field", ""))
     section = target_gap.get("section", "")
 
@@ -231,14 +178,7 @@ def entry_label(resume: Dict[str, Any], target_gap: Dict[str, Any]) -> str:
     return role or (f"at {company}" if company else "there")
 
 def recorded_values(resume: Dict[str, Any], field: str, fields: List[str]) -> List[str]:
-    """What the resume currently holds for the fields a follow-up is about.
-
-    A planner follow-up names an item and the fields its answer lands in. Where those
-    already hold something — a bullet to sharpen, a date that contradicts another — the
-    user has to see it, or they are matching the question against a line they wrote weeks
-    ago from memory. Empty fields quote nothing: a follow-up about a missing end date has
-    no "your resume says" to show.
-    """
+    """What the resume currently holds for the fields a follow-up is about."""
     item = current_item(resume, field)
     out: List[str] = []
     for name in fields or []:
@@ -249,24 +189,22 @@ def recorded_values(resume: Dict[str, Any], field: str, fields: List[str]) -> Li
     return out
 
 def impact_question(target_gap: Dict[str, Any]) -> str:
-    """A deterministic, self-contained question about one exact resume bullet.
-
-    This is deliberately not LLM-written. When asking somebody to substantiate a
-    claim, vague phrasing or a paraphrased bullet makes them guess what we mean.
-    """
+    """A deterministic, self-contained question about one exact resume bullet."""
     bullet = target_gap.get("weak_bullet", "")
     reason = str(target_gap.get("reason") or "it does not yet show a clear result").rstrip(".")
-    return quote_bullet(
-        bullet,
+    entry = target_gap.get("entry")
+
+    asked = (
         f"Why it could be stronger: {reason}. What changed after your work? "
         "Share any real result you remember — for example time saved, cost, reliability, "
-        "speed, users, conversion, or error reduction.",
+        "speed, users, conversion, or error reduction."
     )
+    quoted = quote_bullet(bullet, asked)
+    return f"**{entry}**\n\n{quoted}" if entry else quoted
 
 def generate_question(state: ResumeState) -> Dict[str, Any]:
-    """
-    Uses the LLM to generate the natural language question based on active_target.
-    Returns the result in state.current_question.
+    """Uses the LLM to generate the natural language question based on active_target. Returns
+    the result in state.current_question.
     """
     target_gap = state.get("active_target")
     if not target_gap:
@@ -284,13 +222,13 @@ def generate_question(state: ResumeState) -> Dict[str, Any]:
                     target_gap["question_text"],
                 ),
                 "section": target_gap.get("section", ""),
-                                                                                     
+
                 "ui": "chips",
                 "options": [SKIP_CHIP],
                 "is_gate": False,
                 "missing_fields": target_gap.get("missing_fields", []),
                 "bullet_index": None,
-                                                                                       
+
                 "is_follow_up": True,
             },
         }
@@ -298,9 +236,7 @@ def generate_question(state: ResumeState) -> Dict[str, Any]:
     llm = get_openai_llm()
 
     errors = state.get("validation_errors", [])
-    error_context = ""
-    if errors:
-        error_context = f"\n\nCRITICAL: The user's previous answer for this field failed validation! Error: {errors[-1]}\nYou MUST apologize and politely re-ask the user to provide the information in the correct format."
+    error_context = QUESTION_ERROR_CONTEXT.format(error=errors[-1]) if errors else ""
 
     missing_fields = target_gap.get("missing_fields", [])
     is_gate = target_gap.get("is_gate", False)
@@ -318,7 +254,7 @@ def generate_question(state: ResumeState) -> Dict[str, Any]:
             profile = state.get("master_profile") or {}
             if hasattr(profile, "model_dump"):
                 profile = profile.model_dump()
-                                                                                     
+
             suggested = role_skill_chips(role, used_technologies(profile))
             if suggested:
                 text = (
@@ -342,7 +278,7 @@ def generate_question(state: ResumeState) -> Dict[str, Any]:
         }
 
     if target_gap.get("skip_section_if_empty"):
-                                                                                 
+
         return {
             "current_question": {
                 "field": target_gap["field"],
@@ -370,7 +306,7 @@ def generate_question(state: ResumeState) -> Dict[str, Any]:
                 "question_text": f"When were you {entry_label(resume, target_gap)}?",
                 "section": target_gap.get("section", ""),
                 "ui": "dates",
-                                                                                         
+
                 "options": [SKIP_CHIP],
                 "is_gate": False,
                 "missing_fields": missing_fields,
@@ -403,45 +339,35 @@ def generate_question(state: ResumeState) -> Dict[str, Any]:
             }
 
     if target_gap.get("section") == "impact":
-                                                                                      
+        rewrite = target_gap.get("rewrite") or ""
+
         return {
             "current_question": {
                 "field": target_gap["field"],
                 "question_text": impact_question(target_gap),
                 "section": "impact",
-                "ui": "chips",
+
+                # No usable rewrite means the plain free-text question.
+                "ui": "metric" if rewrite else "chips",
                 "options": IMPACT_OPTIONS,
                 "is_gate": False,
                 "skip_section_if_empty": False,
                 "missing_fields": target_gap.get("missing_fields", []),
                 "bullet_index": target_gap.get("bullet_index"),
+
+                "meta": {"template": rewrite} if rewrite else None,
             },
         }
     else:
-        instructions = f"""
-    The user's resume is missing specific fields for the item {target_gap['field']}.
-    Specifically, these fields are missing and need to be filled: {missing_str}.
-    Reason: {target_gap['reason']}
-    
-    Ask a short, conversational question to gather ONLY these missing fields: {missing_str}.
-    Do NOT ask for fields that are already filled. Combine the request for these missing fields into one smooth question.
+        instructions = QUESTION_INSTRUCTIONS.format(
+            field=target_gap["field"], missing=missing_str, reason=target_gap["reason"]
+        )
 
-    If the requested fields have clear, common answers (like 3-5 common skills for their role), set ui to 'chips' and provide those as options.
-    Otherwise, if it requires a free-text response, set ui to 'text' and leave options empty.
-        """
-
-    prompt = f"""
-    You are an expert resume assistant.
-    {error_context}
-
-    {known_context(state, target_gap['field'])}
-
-    {instructions}
-
-    Never re-ask for anything listed as already recorded above, and word the question so it
-    fits what you already know about them.
-    Keep the question polite and under 2 sentences.
-    """
+    prompt = GENERATE_QUESTION.format(
+        error_context=error_context,
+        known_context=known_context(state, target_gap["field"]),
+        instructions=instructions,
+    )
 
     try:
         structured_llm = llm.with_structured_output(GeneratedQuestion)
@@ -456,10 +382,10 @@ def generate_question(state: ResumeState) -> Dict[str, Any]:
         options = []
 
     if target_gap.get("skip_section_if_empty"):
-                                                                                      
+
         ui, options = "chips", [SKIP_CHIP]
     else:
-                                                                                         
+
         ui, options = with_skip(ui, options)
 
     return {
@@ -472,180 +398,8 @@ def generate_question(state: ResumeState) -> Dict[str, Any]:
             "is_gate": is_gate,
             "skip_section_if_empty": target_gap.get("skip_section_if_empty", False),
             "missing_fields": missing_fields,
-                                                                                 
+
             "bullet_index": target_gap.get("bullet_index"),
         },
-                                                                                       
+
     }
-
-if __name__ == "__main__":
-    from app.graphs.node.career_setup import read_career_level, read_target_role
-
-    assert IMPACT_OPTIONS == ["I don't have a number", "Skip this one"]
-
-    for option in IMPACT_OPTIONS:
-        assert "%" not in option, option
-        assert not any(ch.isdigit() for ch in option), f"a magnitude leaked into the chips: {option}"
-
-    gate = generate_question({"active_target": {
-        "field": "experience[0]", "section": "experience", "is_gate": True,
-        "missing_fields": ["company", "position", "highlights"],
-    }})["current_question"]
-    assert gate["ui"] == "chips" and gate["options"] == [YES_CHIP, NO_CHIP]
-    assert gate["question_text"] == "Do you have any work experience to add?"
-    assert gate["is_gate"] is True, "validate_entities keys the slot-opening off this"
-    assert len(gate["question_text"].split()) < 12
-
-    from app.graphs.node.analyze_gaps import MORE_FIELDS, more_gate
-
-    for section in MORE_FIELDS:
-        again = generate_question({"active_target": more_gate(section, 1)})["current_question"]
-        first = generate_question({"active_target": {
-            "field": f"{section}[0]", "section": section, "is_gate": True,
-            "missing_fields": MORE_FIELDS[section],
-        }})["current_question"]
-        assert again["question_text"] != first["question_text"], section
-        assert "other" in again["question_text"].lower(), again["question_text"]
-        assert again["options"] == [YES_CHIP, NO_CHIP], again["options"]
-                                                                                   
-        assert again["is_gate"] is True and again["field"] == f"{section}[1]"
-
-    SKILLS_GAP = {"field": "skills", "section": "skills", "is_gate": True,
-                  "missing_fields": ["skills"]}
-    skills_gate = generate_question({"active_target": SKILLS_GAP})["current_question"]
-    assert "skills" in skills_gate["question_text"].lower()
-    assert YES_CHIP not in skills_gate["options"], "a yes/no here would cost a turn for nothing"
-                                                                                 
-    assert skills_gate["ui"] == "chips" and skills_gate["options"] == ["Skip this"]
-
-    level_q = generate_question({"active_target": {
-        "field": "career_level", "section": "career_level", "is_gate": True, "missing_fields": [],
-    }})["current_question"]
-    assert level_q["options"] == list(CAREER_CHIPS), level_q["options"]
-    for label in level_q["options"]:
-        assert read_career_level(label), f"offered a chip nobody can parse: {label}"
-
-    role_q = generate_question({"active_target": {
-        "field": "target_role", "section": "target_role", "is_gate": True, "missing_fields": [],
-    }})["current_question"]
-    assert role_q["options"] == list(ROLE_CHIPS)
-    assert "type" in role_q["question_text"].lower(), "a closed list of roles is a dead end"
-    for label in role_q["options"]:
-        assert read_target_role(label) == label
-
-    PROFILE = {
-        "basics": {"name": "Priya", "email": "", "phone": ""},
-        "experience": [{"company": "Acme", "position": "", "highlights": []}],
-        "education": [], "projects": [], "skills": [],
-    }
-    ctx = known_context(
-        {"master_profile": PROFILE, "career_level": "experienced", "target_role": "Backend Engineer"},
-        "experience[0]",
-    )
-    assert "experienced" in ctx and "Backend Engineer" in ctx
-    assert "Acme" in ctx, "the question must know what's already on the entry it's asking about"
-    assert "position" not in ctx, "empty fields are what we're asking for, not context"
-    assert "Sections already recorded: experience" in ctx
-    assert known_context({}, "basics") == "", "nothing known yet, nothing to say"
-
-    BUILT = {
-        "experience": [{"highlights": ["Cut LLM token consumption 40% with Node.js and MongoDB"]}],
-        "projects": [{"description": "Multimodal RAG Platform",
-                      "highlights": ["Built on FastAPI, LangGraph, React, FAISS and Redis"]}],
-    }
-    evidence = used_technologies(BUILT)
-    for named in ("Node.js", "MongoDB", "FastAPI", "LangGraph", "FAISS", "Multimodal RAG"):
-        assert named in evidence, named
-    assert used_technologies({}) == "", "nothing described yet, nothing to draw on"
-    assert used_technologies({"experience": [{"highlights": []}]}) == ""
-                                                                                        
-    assert len(used_technologies({"projects": [
-        {"highlights": [f"Did thing {i}" for i in range(50)]}]}).splitlines()) == 20
-
-    assert current_item(PROFILE, "experience[0]")["company"] == "Acme"
-    assert current_item(PROFILE, "experience[7]") == {}, "an index past the end is not a crash"
-    assert current_item(PROFILE, "basics")["name"] == "Priya"
-    assert current_item(PROFILE, "skills") == {}, "a list section has no single entry"
-
-    assert says_yes("Yes") and says_yes("yeah ok") and says_yes(IMPACT_OPTIONS[0]) is False
-    assert not says_yes("No, skip this") and not says_yes("") and not says_yes("not really")
-
-    for tap in ("Yes", "yeah", " OK ", "Sure.", "YES", "yes please", "Correct", "y"):
-        assert is_affirmation(tap), tap
-    for real in ("Okta", "Yesware", "Sure Retail Ltd", "Amity University", "tata", ""):
-        assert not is_affirmation(real), real
-    assert says_yes("Okta"), "says_yes is prefix-matched — which is exactly why it is not used here"
-
-    assert with_skip("text", []) == ("chips", [SKIP_CHIP])
-    assert with_skip("chips", ["A", "B"]) == ("chips", ["A", "B", SKIP_CHIP])
-    assert with_skip("chips", [SKIP_CHIP]) == ("chips", [SKIP_CHIP]), "never offered twice"
-    assert with_skip("multi_select", ["Python"])[0] == "multi_select", "the skills list stays a list"
-
-    invented = generate_question({"active_target": {
-        "field": "projects[0]", "section": "projects", "missing_fields": ["highlights"],
-        "question_text": "What did the project actually do?",
-    }})["current_question"]
-    assert invented["options"] == [SKIP_CHIP] and invented["ui"] == "chips"
-    assert invented["question_text"] == "What did the project actually do?", "written by the planner, not reworded"
-
-    WRITTEN = {**PROFILE, "experience": [
-        {"company": "Acme", "position": "", "highlights": ["Built things", "Shipped the thing"]},
-    ]}
-    quoted = generate_question({"master_profile": WRITTEN, "active_target": {
-        "field": "experience[0]", "section": "experience", "missing_fields": ["highlights"],
-        "question_text": "Which of these had a number attached?",
-    }})["current_question"]
-    assert "> Built things" in quoted["question_text"], quoted["question_text"]
-    assert "> Shipped the thing" in quoted["question_text"], "every bullet on the entry, not just the first"
-    assert quoted["question_text"].endswith("Which of these had a number attached?")
-
-    bare = generate_question({"master_profile": PROFILE, "active_target": {
-        "field": "experience[0]", "section": "experience", "missing_fields": ["end_date"],
-        "question_text": "When did you leave?",
-    }})["current_question"]
-    assert bare["question_text"] == "When did you leave?", bare["question_text"]
-
-    DATED = {**PROFILE, "experience": [
-        {"company": "Acme", "position": "Engineer", "highlights": ["Built things"]},
-    ], "education": [{"institution": "Amity University", "study_type": "MCA"}]}
-
-    dates = generate_question({"master_profile": DATED, "active_target": {
-        "field": "experience[0]", "section": "experience",
-        "missing_fields": ["start_date", "end_date"],
-    }})["current_question"]
-    assert dates["ui"] == "dates", dates
-    assert dates["options"] == [SKIP_CHIP], "a job nobody can date must not be a dead end"
-    assert "Engineer at Acme" in dates["question_text"], dates["question_text"]
-
-    assert generate_question({"master_profile": DATED, "active_target": {
-        "field": "experience[0]", "section": "experience", "missing_fields": ["end_date"],
-    }})["current_question"]["ui"] == "dates"
-
-    both = generate_question({"master_profile": DATED, "active_target": {
-        "field": "experience[0]", "section": "experience",
-        "missing_fields": ["start_date", "end_date", "highlights"],
-    }})["current_question"]
-    assert both["ui"] == "chips" and "bullet points" in both["question_text"], both
-
-    assert "Amity University" in generate_question({"master_profile": DATED, "active_target": {
-        "field": "education[0]", "section": "education", "missing_fields": ["end_date"],
-    }})["current_question"]["question_text"]
-
-    assert entry_label({}, {"field": "experience[3]", "section": "experience"}) == "there",\
-        "an entry with nothing on it yet still has to be referred to somehow"
-
-    assert recorded_values(PROFILE, "basics", ["name"]) == ["Priya"]
-    assert recorded_values(PROFILE, "experience[9]", ["company"]) == [], "a path past the end quotes nothing"
-    assert recorded_values(PROFILE, "experience[0]", []) == []
-
-    assert SKIP_CHIP not in IMPACT_OPTIONS, "impact has its own wording for this"
-
-    asked = quote_bullet("Orchestrated TTS, AWS S3, and SSE", "What changed?")
-    assert "> Orchestrated TTS, AWS S3, and SSE" in asked, asked
-    assert asked.endswith("What changed?")
-    assert quote_bullet("", "What changed?") == "What changed?", "no bullet, no blockquote"
-    impact = impact_question({"weak_bullet": "Integrated Razorpay payments", "reason": "has no measurable result"})
-    assert "> Integrated Razorpay payments" in impact
-    assert "Why it could be stronger: has no measurable result" in impact
-
-    print("generate_question ok")

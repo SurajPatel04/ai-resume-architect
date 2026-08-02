@@ -8,11 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.db import Base
 
 class ChatSession(Base):
-    """One resume-building conversation.
-
-    `id` doubles as the LangGraph thread_id, so this table answers "which sessions
-    does this user have" without deserializing checkpoints.
-    """
+    """One resume-building conversation."""
 
     __tablename__ = "chat_sessions"
     __table_args__ = (
@@ -47,15 +43,11 @@ class ChatSession(Base):
         return f"<ChatSession id={self.id} user_id={self.user_id}>"
 
 class ChatMessage(Base):
-    """One turn of the conversation, human or AI.
-
-    The checkpoint holds the resume state; this holds what was actually said, so a
-    resumed session can redraw the chat without replaying the graph.
-    """
+    """One turn of the conversation, human or AI."""
 
     __tablename__ = "chat_messages"
     __table_args__ = (
-                                                           
+
         Index("ix_chat_messages_session_id", "session_id", "id"),
     )
 
@@ -67,12 +59,15 @@ class ChatMessage(Base):
         nullable=False,
     )
 
-    role: Mapped[str] = mapped_column(String(16), nullable=False)                        
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
 
     content: Mapped[str] = mapped_column(Text, nullable=False)
 
     ui: Mapped[str | None] = mapped_column(String(16), nullable=True)
     options: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
+    # Whatever the `ui` needs beyond chips, e.g. a "metric" question's template.
+    meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -86,6 +81,7 @@ class ChatMessage(Base):
             "content": self.content,
             "ui": self.ui,
             "options": self.options or [],
+            "meta": self.meta,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

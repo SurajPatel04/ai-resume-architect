@@ -6,6 +6,9 @@ load_dotenv()
 def get_openai_llm():
     return init_chat_model("openai:gpt-4o-mini", temperature=0, stream_usage=True)
 
+def get_openai_vision_llm():
+    return init_chat_model("openai:gpt-4o", temperature=0, stream_usage=True)
+
 def get_openai_cheap_llm():
     return init_chat_model(
         "openai:gpt-5-nano",
@@ -29,4 +32,4 @@ def get_google_llm():
         temperature=0,
         streaming=True,
     )
-
+

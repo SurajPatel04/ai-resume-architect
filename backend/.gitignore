@@ -29,6 +29,10 @@ Thumbs.db
 # Generated/Uploads
 app/static/pdfs/*.pdf
 
+# Typefaces fetched from google/fonts, not authored here. ~35 MB of binaries that
+# would sit in the history forever; scripts/fetch_fonts.py pulls them on deploy.
+app/static/fonts/
+
 # Testing
 .pytest_cache/
 .coverage

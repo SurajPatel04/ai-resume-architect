@@ -45,6 +45,26 @@ export interface ResumeSkillCategory {
     keywords?: string[];
 }
 
+export interface ResumeCertification {
+    name?: string;
+    issuer?: string;
+    date?: string;
+    url?: string;
+}
+
+export interface ResumeCustomEntry {
+    title?: string;
+    subtitle?: string;
+    date?: string;
+    highlights?: string[];
+}
+
+/** A section the schema does not model: Volunteering, Awards, Publications. */
+export interface ResumeCustomSection {
+    name?: string;
+    entries?: ResumeCustomEntry[];
+}
+
 export interface Resume {
     basics?: ResumeBasics;
     summary?: { content?: string };
@@ -52,4 +72,6 @@ export interface Resume {
     education?: ResumeEducation[];
     skills?: ResumeSkillCategory[];
     projects?: ResumeProject[];
+    certifications?: ResumeCertification[];
+    custom_sections?: ResumeCustomSection[];
 }

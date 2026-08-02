@@ -11,10 +11,7 @@ logger = logging.getLogger(__name__)
 TITLE_MAX = 60
 
 async def ensure_session(db: AsyncSession, session_id: str, user_id: uuid.UUID, title: str) -> bool:
-    """Create the session row if new. False means it belongs to someone else.
-
-    session_id is client-supplied, so this doubles as the ownership gate.
-    """
+    """Create the session row if new. False means it belongs to someone else."""
     existing = await db.get(ChatSession, session_id)
     if existing:
         return existing.user_id == user_id
@@ -30,6 +27,7 @@ async def add_message(
     content: str,
     ui: str | None = None,
     options: list | None = None,
+    meta: dict | None = None,
 ) -> None:
     db.add(ChatMessage(
         session_id=session_id,
@@ -37,8 +35,9 @@ async def add_message(
         content=content,
         ui=ui,
         options=options or None,
+        meta=meta or None,
     ))
-                                                          
+
     await db.execute(
         update(ChatSession)
         .where(ChatSession.id == session_id)

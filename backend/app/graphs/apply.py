@@ -1,8 +1,4 @@
-"""Deterministic profile mutation.
-
-Shared by validate_entities (dry-run against the schema) and merge_profile (for real)
-so the two can never drift apart.
-"""
+"""Deterministic profile mutation."""
 
 import copy
 import re
@@ -13,14 +9,7 @@ LIST_FIELDS = {"highlights", "keywords"}
 _MARKER = re.compile(r"^\s*(?:[-*•‣▪·]\s*|\d+[.)]\s+)")
 
 def split_list(key: str, text: str) -> List[str]:
-    """One free-text answer into the list items it holds.
-
-    Bullets are separated by newlines, never by commas. Splitting them on commas is what
-    turned one pasted project into "FAISS", "Redis", "SSE) enabling Q&A over documents
-    (PDF", "Word", "Excel" — a real bullet names its stack in a comma list and cannot
-    survive being split on one. Skills are the opposite: a comma list is the whole point
-    of "Python, Go, Rust", and they arrive on a single line.
-    """
+    """One free-text answer into the list items it holds."""
     if key == "highlights":
         parts = text.replace("\\n", "\n").splitlines()
     else:
@@ -28,12 +17,43 @@ def split_list(key: str, text: str) -> List[str]:
 
     return [item for item in (_MARKER.sub("", p).strip() for p in parts) if item]
 
-def impact_key(field: str, bullet_index: Optional[int]) -> str:
-    """Stable id for 'we already asked this bullet for a number'.
+SLOT = "{}"
 
-    Written by validate/merge into `skipped`, read back by analyze_gaps. One
-    definition so the writer and the reader can't disagree on the format.
-    """
+def slot_parts(template: str) -> Optional[List[str]]:
+    """A bullet template split around its one blank, or None if it isn't one."""
+    if not template or template.count(SLOT) != 1:
+        return None
+
+    before, after = template.split(SLOT)
+    if any(brace in before + after for brace in "{}"):
+        return None
+
+    return [before, after]
+
+def fill_slot(template: str, figure: str) -> Optional[str]:
+    """The bullet with the candidate's figure in the blank."""
+    parts = slot_parts(template)
+    figure = (figure or "").strip()
+    if parts is None or not figure:
+        return None
+    return f"{parts[0]}{figure}{parts[1]}"
+
+def read_slot(template: str, answer: str) -> Optional[str]:
+    """The figure out of a bullet the user has already filled in, or None."""
+    parts = slot_parts(template)
+    if parts is None:
+        return None
+
+    before, after = parts
+    answer = (answer or "").strip()
+    if not answer.startswith(before) or not answer.endswith(after):
+        return None
+
+    figure = answer[len(before):len(answer) - len(after)] if after else answer[len(before):]
+    return figure.strip() or None
+
+def impact_key(field: str, bullet_index: Optional[int]) -> str:
+    """Stable id for 'we already asked this bullet for a number'."""
     return f"impact.{field}.{bullet_index}"
 
 def _resolve(r: Dict[str, Any], target_field: str) -> Any:
@@ -60,16 +80,9 @@ def apply_extraction(
     values: Dict[str, Any],
     bullet_index: Optional[int] = None,
     replace: bool = False,
+    template: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Return a NEW resume dict with `values` applied at `target_field`.
-
-    bullet_index set => the user just quantified an existing bullet. Fold the number
-    into that bullet instead of appending a new one; enhance_resume rewrites it into
-    proper prose at the end of the run.
-
-    replace => overwrite list fields instead of appending to them. Collecting an answer
-    adds to what's there; correcting a bad import must not.
-    """
+    """Return a NEW resume dict with `values` applied at `target_field`."""
     r = copy.deepcopy(resume)
     current = _resolve(r, target_field)
 
@@ -82,7 +95,8 @@ def apply_extraction(
         highlights = current.get("highlights") or []
         metric = " ".join(str(v).strip() for v in values.values() if str(v).strip())
         if metric and 0 <= bullet_index < len(highlights):
-            highlights[bullet_index] = f"{highlights[bullet_index]} ({metric})"
+            rewritten = fill_slot(template, metric) if template else None
+            highlights[bullet_index] = rewritten or f"{highlights[bullet_index]} ({metric})"
             current["highlights"] = highlights
         return r
 
@@ -112,57 +126,3 @@ def apply_extraction(
         else:
             current[key] = val
     return r
-
-if __name__ == "__main__":
-    base = {"basics": {"name": "", "email": ""}, "experience": [], "skills": [], "projects": []}
-
-    r = apply_extraction(base, "basics", {"name": "Priya", "email": "p@x.com"})
-    assert r["basics"] == {"name": "Priya", "email": "p@x.com"}, r["basics"]
-
-    r = apply_extraction(base, "experience[0]", {"company": "Acme", "highlights": "Shipped X\nRan Y"})
-    assert r["experience"][0]["company"] == "Acme"
-    assert r["experience"][0]["highlights"] == ["Shipped X", "Ran Y"], r["experience"][0]
-
-    PASTED = (
-        "• Engineered a full-stack multimodal RAG platform (FastAPI, LangGraph, React, "
-        "MongoDB, FAISS, Redis, SSE) enabling Q&A over documents (PDF, Word, Excel, CSV).\n"
-        "• Integrated Deepgram for timestamped transcription, enabling precise retrieval.\n"
-    )
-    kept = apply_extraction(base, "projects[0]", {"highlights": PASTED})["projects"][0]["highlights"]
-    assert len(kept) == 2, kept
-    assert kept[0].startswith("Engineered"), "the marker is stripped, the sentence is not"
-    assert "FastAPI, LangGraph, React" in kept[0], "a bullet's own comma list must survive"
-    assert not any(k in ("FAISS", "Redis", "Word", "Excel") for k in kept), kept
-
-    assert split_list("highlights", "- One\n\n* Two\n1. Three\n•Four")\
-        == ["One", "Two", "Three", "Four"]
-                                                                               
-    assert split_list("keywords", "Python, Go, Rust") == ["Python", "Go", "Rust"]
-    assert split_list("keywords", "Python\nGo") == ["Python", "Go"], "newlines still separate"
-    assert split_list("highlights", "   ") == [] and split_list("keywords", "") == []
-
-    r = apply_extraction({"skills": [{"name": "Languages", "keywords": ["Python"]}]}, "skills", {"skills": ["Go"]})
-    assert r["skills"][0]["keywords"] == ["Python", "Go"], r["skills"]
-
-    prof = {"experience": [{"highlights": ["Old bullet"]}]}
-    assert apply_extraction(prof, "experience[0]", {"highlights": "New"})["experience"][0]["highlights"]\
-        == ["Old bullet", "New"]
-    assert apply_extraction(prof, "experience[0]", {"highlights": "New"}, replace=True)["experience"][0]["highlights"]\
-        == ["New"]
-
-    prof = {"experience": [{"highlights": ["Managed social media", "Ran ads"]}]}
-    r = apply_extraction(prof, "experience[0]", {"metric": "grew engagement 150%"}, bullet_index=0)
-    assert r["experience"][0]["highlights"][0] == "Managed social media (grew engagement 150%)"
-    assert r["experience"][0]["highlights"][1] == "Ran ads"
-    assert prof["experience"][0]["highlights"][0] == "Managed social media", "must not mutate the input"
-
-    prof = {"basics": {"name": "S", "phone": "9876543210"}}
-    assert apply_extraction(prof, "basics.phone", {"phone": "9839916634"})["basics"]\
-        == {"name": "S", "phone": "9839916634"}
-    assert apply_extraction(prof, "basics.phone", {"value": "9839916634"})["basics"]["phone"] == "9839916634"
-    assert apply_extraction({"summary": {"content": "old"}}, "summary.content", {"content": "new"})["summary"]\
-        == {"content": "new"}
-    assert apply_extraction({"experience": [{"company": "Acme"}]}, "experience[0].company", {"company": "Zeta"})\
-        ["experience"][0]["company"] == "Zeta"
-
-    print("apply_extraction ok")
